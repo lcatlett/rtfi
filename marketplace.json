@@ -1,0 +1,37 @@
+{
+  "name": "rtfi",
+  "version": "0.1.0",
+  "title": "RTFI - Real-Time Instruction Compliance Risk Scoring",
+  "description": "Predicts when AI sessions are at risk of ignoring your instructions, enabling proactive intervention before failures occur. Tracks context length, agent fanout, autonomy depth, and decision velocity to calculate a real-time compliance risk score.",
+  "author": {
+    "name": "RTFI Team"
+  },
+  "repository": "https://github.com/lcatlett/rtfi",
+  "license": "MIT",
+  "category": "observability",
+  "tags": [
+    "observability",
+    "compliance",
+    "risk-scoring",
+    "instructions",
+    "monitoring",
+    "ai-safety"
+  ],
+  "features": [
+    "Real-time risk scoring based on session factors",
+    "Configurable threshold alerts (alert/block/confirm modes)",
+    "Session history and analytics via CLI commands",
+    "Session analyzer agent for root cause analysis",
+    "Risk scoring skill for threshold tuning guidance"
+  ],
+  "components": {
+    "hooks": 4,
+    "commands": 4,
+    "agents": 1,
+    "skills": 1
+  },
+  "requirements": {
+    "python": ">=3.11",
+    "dependencies": ["pydantic>=2.0.0"]
+  }
+}

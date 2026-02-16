@@ -7,7 +7,7 @@ import logging.handlers
 import os
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -237,7 +237,7 @@ def handle_session_start(hook_data: dict) -> dict:
     session_id = str(uuid.uuid4())
     os.environ[SESSION_ID_ENV] = session_id
 
-    session = Session(id=session_id)
+    session = Session(id=session_id, project_dir=os.environ.get("CLAUDE_PROJECT_DIR"))
     engine.start_session(session)
     db.save_session(session)
 
@@ -409,7 +409,7 @@ def handle_stop(hook_data: dict) -> dict:
             session.final_risk_score = session.peak_risk_score
 
         session.outcome = SessionOutcome.COMPLETED
-        session.ended_at = datetime.now()
+        session.ended_at = datetime.now(timezone.utc)
         db.save_session(session)
 
         log_audit(
@@ -478,6 +478,8 @@ def main():
         logger.exception(f"Unhandled exception in hook handler: {e}")
         # Always return continue: True to avoid breaking Claude Code
         print(json.dumps({"continue": True, "decision": "approve"}))
+    finally:
+        db.close()  # L1: close cached connection
 
 
 if __name__ == "__main__":

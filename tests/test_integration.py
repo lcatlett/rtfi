@@ -87,7 +87,8 @@ class TestCrossProcessStatePersistence:
 
         assert row and row[0], "Session state not persisted"
         state = json.loads(row[0])
-        assert state["active_agents"] == 3, f"Expected 3 agents, got {state['active_agents']}"
+        agent_count = len(state.get("agent_spawn_timestamps", []))
+        assert agent_count == 3, f"Expected 3 agent timestamps, got {agent_count}"
 
     def test_stop_produces_session_summary(self):
         """handle_stop should return a summary with non-zero stats."""

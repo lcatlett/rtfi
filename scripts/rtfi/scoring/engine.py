@@ -1,10 +1,12 @@
 """Risk scoring engine - the core of RTFI."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable
 
 from rtfi.models.events import EventType, RiskEvent, RiskScore, Session
+
+AGENT_DECAY_SECONDS = 300  # 5 minutes (H6)
 
 
 @dataclass
@@ -13,53 +15,88 @@ class SessionState:
 
     session: Session
     tokens: int = 0
-    active_agents: int = 0
     steps_since_confirm: int = 0
     tool_calls_timestamps: list[datetime] = field(default_factory=list)
+    agent_spawn_timestamps: list[datetime] = field(default_factory=list)  # H6: time-decay
+
+    @property
+    def active_agents(self) -> int:
+        """Count agents spawned within the last 5 minutes (H6)."""
+        now = datetime.now(timezone.utc)
+        cutoff = now.timestamp() - AGENT_DECAY_SECONDS
+        return len([t for t in self.agent_spawn_timestamps if t.timestamp() > cutoff])
 
     @property
     def tools_per_minute(self) -> float:
         """Calculate tool calls per minute over the last minute."""
         if not self.tool_calls_timestamps:
             return 0.0
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         one_minute_ago = now.timestamp() - 60
         recent = [t for t in self.tool_calls_timestamps if t.timestamp() > one_minute_ago]
         return len(recent)
 
     def prune_old_timestamps(self) -> None:
-        """Remove timestamps older than 2 minutes to prevent memory growth."""
-        if len(self.tool_calls_timestamps) > 100:  # Only prune when list gets large
-            now = datetime.now()
+        """Remove timestamps older than 10 minutes to prevent memory growth."""
+        now = datetime.now(timezone.utc)
+        ten_minutes_ago = now.timestamp() - 600
+        if len(self.tool_calls_timestamps) > 100:
             two_minutes_ago = now.timestamp() - 120
             self.tool_calls_timestamps = [
                 t for t in self.tool_calls_timestamps if t.timestamp() > two_minutes_ago
+            ]
+        # Prune agent timestamps older than 10 minutes (H6)
+        if len(self.agent_spawn_timestamps) > 50:
+            self.agent_spawn_timestamps = [
+                t for t in self.agent_spawn_timestamps if t.timestamp() > ten_minutes_ago
             ]
 
     def to_dict(self) -> dict:
         """Serialize mutable state fields to a dict for persistence."""
         return {
             "tokens": self.tokens,
-            "active_agents": self.active_agents,
+            "active_agents": len(self.agent_spawn_timestamps),  # total spawns for compat
             "steps_since_confirm": self.steps_since_confirm,
             "tool_timestamps": [t.isoformat() for t in self.tool_calls_timestamps],
+            "agent_spawn_timestamps": [t.isoformat() for t in self.agent_spawn_timestamps],
         }
 
     @classmethod
     def from_dict(cls, data: dict, session: Session) -> "SessionState":
         """Restore session state from a persisted dict."""
-        timestamps = []
+        tool_timestamps = []
         for ts in data.get("tool_timestamps", []):
             try:
-                timestamps.append(datetime.fromisoformat(ts))
+                dt = datetime.fromisoformat(ts)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                tool_timestamps.append(dt)
             except (ValueError, TypeError):
                 continue
+
+        agent_timestamps = []
+        for ts in data.get("agent_spawn_timestamps", []):
+            try:
+                dt = datetime.fromisoformat(ts)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                agent_timestamps.append(dt)
+            except (ValueError, TypeError):
+                continue
+
+        # Backward compat: if no agent_spawn_timestamps but active_agents > 0,
+        # create synthetic timestamps for legacy data
+        if not agent_timestamps and data.get("active_agents", 0) > 0:
+            now = datetime.now(timezone.utc)
+            for i in range(data["active_agents"]):
+                agent_timestamps.append(now)
+
         return cls(
             session=session,
             tokens=data.get("tokens", 0),
-            active_agents=data.get("active_agents", 0),
             steps_since_confirm=data.get("steps_since_confirm", 0),
-            tool_calls_timestamps=timestamps,
+            tool_calls_timestamps=tool_timestamps,
+            agent_spawn_timestamps=agent_timestamps,
         )
 
 
@@ -87,7 +124,7 @@ class RiskEngine:
         """End and return a session."""
         state = self._sessions.pop(session_id, None)
         if state:
-            state.session.ended_at = datetime.now()
+            state.session.ended_at = datetime.now(timezone.utc)
             return state.session
         return None
 
@@ -114,7 +151,7 @@ class RiskEngine:
                 state.tokens = event.context_tokens
 
         elif event.event_type == EventType.AGENT_SPAWN:
-            state.active_agents += 1
+            state.agent_spawn_timestamps.append(event.timestamp)  # H6: track timestamp
             state.session.total_agent_spawns += 1
 
         elif event.event_type == EventType.CHECKPOINT:

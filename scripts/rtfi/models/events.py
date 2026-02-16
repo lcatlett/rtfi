@@ -1,6 +1,6 @@
 """Event and session data models."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -78,7 +78,7 @@ class RiskEvent(BaseModel):
 
     id: int | None = None
     session_id: str
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     event_type: EventType
     tool_name: str | None = None
     context_tokens: int = 0
@@ -90,7 +90,7 @@ class Session(BaseModel):
     """An RTFI-monitored session."""
 
     id: str
-    started_at: datetime = Field(default_factory=datetime.now)
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     ended_at: datetime | None = None
     instruction_source: str | None = None
     instruction_hash: str | None = None
@@ -99,3 +99,4 @@ class Session(BaseModel):
     peak_risk_score: float = 0.0
     total_tool_calls: int = 0
     total_agent_spawns: int = 0
+    project_dir: str | None = None

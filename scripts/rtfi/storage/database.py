@@ -3,6 +3,7 @@
 import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -50,12 +51,22 @@ CREATE INDEX IF NOT EXISTS idx_sessions_outcome ON sessions(outcome);
 """
 
 
+def _parse_datetime(value: str) -> datetime:
+    """Parse an ISO 8601 datetime string, handling both naive and tz-aware formats."""
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        # Treat naive timestamps as UTC for backward compatibility (M2)
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 class Database:
     """SQLite database for RTFI session and event storage."""
 
     def __init__(self, db_path: Path | None = None):
         self.db_path = db_path or DEFAULT_DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._conn: sqlite3.Connection | None = None  # L1: connection caching
         self._init_schema()
         # Restrict database file permissions (M8)
         try:
@@ -63,118 +74,179 @@ class Database:
         except OSError:
             pass
 
+    def _connect(self) -> sqlite3.Connection:
+        """Get a database connection with pragmas enabled (H4, L1)."""
+        if self._conn is None:
+            self._conn = sqlite3.connect(self.db_path)
+            self._conn.execute("PRAGMA foreign_keys = ON")  # H4: enforce foreign keys
+        return self._conn
+
+    def close(self) -> None:
+        """Close the cached connection."""
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+
     def _init_schema(self) -> None:
         """Initialize database schema."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.executescript(SCHEMA)
-            # Migration: add session_state column if missing
-            cursor = conn.execute("PRAGMA table_info(sessions)")
-            columns = {row[1] for row in cursor.fetchall()}
-            if "session_state" not in columns:
-                conn.execute("ALTER TABLE sessions ADD COLUMN session_state TEXT")
+        conn = self._connect()
+        conn.executescript(SCHEMA)
+        # Re-enable foreign keys after executescript (it issues implicit COMMIT)
+        conn.execute("PRAGMA foreign_keys = ON")
+        # Migrations
+        cursor = conn.execute("PRAGMA table_info(sessions)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "session_state" not in columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN session_state TEXT")
+        if "project_dir" not in columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN project_dir TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_dir)"
+            )
+        conn.commit()
 
     def save_session(self, session: Session) -> None:
         """Save or update a session."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO sessions
-                (id, started_at, ended_at, instruction_source, instruction_hash,
-                 final_risk_score, peak_risk_score, total_tool_calls,
-                 total_agent_spawns, outcome)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    session.id,
-                    session.started_at.isoformat(),
-                    session.ended_at.isoformat() if session.ended_at else None,
-                    session.instruction_source,
-                    session.instruction_hash,
-                    session.final_risk_score,
-                    session.peak_risk_score,
-                    session.total_tool_calls,
-                    session.total_agent_spawns,
-                    session.outcome.value,
-                ),
-            )
+        conn = self._connect()
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO sessions
+            (id, started_at, ended_at, instruction_source, instruction_hash,
+             final_risk_score, peak_risk_score, total_tool_calls,
+             total_agent_spawns, outcome, project_dir)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session.id,
+                session.started_at.isoformat(),
+                session.ended_at.isoformat() if session.ended_at else None,
+                session.instruction_source,
+                session.instruction_hash,
+                session.final_risk_score,
+                session.peak_risk_score,
+                session.total_tool_calls,
+                session.total_agent_spawns,
+                session.outcome.value,
+                getattr(session, "project_dir", None),
+            ),
+        )
+        conn.commit()
 
     def save_session_state(self, session_id: str, state_dict: dict) -> None:
         """Persist session state as JSON."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "UPDATE sessions SET session_state = ? WHERE id = ?",
-                (json.dumps(state_dict), session_id),
-            )
+        conn = self._connect()
+        conn.execute(
+            "UPDATE sessions SET session_state = ? WHERE id = ?",
+            (json.dumps(state_dict), session_id),
+        )
+        conn.commit()
 
     def load_session_state(self, session_id: str) -> dict | None:
         """Load persisted session state."""
-        with sqlite3.connect(self.db_path) as conn:
-            row = conn.execute(
-                "SELECT session_state FROM sessions WHERE id = ?", (session_id,)
-            ).fetchone()
-            if row and row[0]:
-                return json.loads(row[0])
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT session_state FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if row and row[0]:
+            return json.loads(row[0])
         return None
 
     def save_event(self, event: RiskEvent) -> int:
         """Save an event and return its ID."""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO risk_events
-                (session_id, timestamp, event_type, tool_name, context_tokens,
-                 risk_score_total, risk_score_factors, threshold_exceeded, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    event.session_id,
-                    event.timestamp.isoformat(),
-                    event.event_type.value,
-                    event.tool_name,
-                    event.context_tokens,
-                    event.risk_score.total if event.risk_score else None,
-                    json.dumps(event.risk_score.model_dump()) if event.risk_score else None,
-                    1 if event.risk_score and event.risk_score.threshold_exceeded else 0,
-                    json.dumps(event.metadata) if event.metadata else None,
-                ),
-            )
-            return cursor.lastrowid or 0
+        conn = self._connect()
+        cursor = conn.execute(
+            """
+            INSERT INTO risk_events
+            (session_id, timestamp, event_type, tool_name, context_tokens,
+             risk_score_total, risk_score_factors, threshold_exceeded, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.session_id,
+                event.timestamp.isoformat(),
+                event.event_type.value,
+                event.tool_name,
+                event.context_tokens,
+                event.risk_score.total if event.risk_score else None,
+                json.dumps(event.risk_score.model_dump()) if event.risk_score else None,
+                1 if event.risk_score and event.risk_score.threshold_exceeded else 0,
+                json.dumps(event.metadata) if event.metadata else None,
+            ),
+        )
+        conn.commit()
+        return cursor.lastrowid or 0
 
     def get_session(self, session_id: str) -> Session | None:
         """Retrieve a session by ID."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT * FROM sessions WHERE id = ?", (session_id,)
-            ).fetchone()
-            if row:
-                return self._row_to_session(row)
+        conn = self._connect()
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        conn.row_factory = None
+        if row:
+            return self._row_to_session(row)
         return None
 
-    def get_recent_sessions(self, limit: int = 20) -> list[Session]:
-        """Get most recent sessions."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
+    def find_session_by_prefix(self, prefix: str) -> Session | None:
+        """Find a session by ID prefix (M3)."""
+        conn = self._connect()
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM sessions WHERE id LIKE ? ORDER BY started_at DESC LIMIT 1",
+            (f"{prefix}%",),
+        ).fetchone()
+        conn.row_factory = None
+        if row:
+            return self._row_to_session(row)
+        return None
+
+    def get_recent_sessions(
+        self, limit: int = 20, project_dir: str | None = None
+    ) -> list[Session]:
+        """Get most recent sessions, optionally filtered by project (M1)."""
+        conn = self._connect()
+        conn.row_factory = sqlite3.Row
+        if project_dir:
+            rows = conn.execute(
+                "SELECT * FROM sessions WHERE project_dir = ? ORDER BY started_at DESC LIMIT ?",
+                (project_dir, limit),
+            ).fetchall()
+        else:
             rows = conn.execute(
                 "SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?", (limit,)
             ).fetchall()
-            return [self._row_to_session(row) for row in rows]
+        conn.row_factory = None
+        return [self._row_to_session(row) for row in rows]
 
     def get_session_events(self, session_id: str) -> Iterator[RiskEvent]:
         """Get all events for a session."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT * FROM risk_events WHERE session_id = ? ORDER BY timestamp",
-                (session_id,),
-            )
-            for row in rows:
-                yield self._row_to_event(row)
+        conn = self._connect()
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM risk_events WHERE session_id = ? ORDER BY timestamp",
+            (session_id,),
+        ).fetchall()  # fetchall to avoid holding cursor
+        conn.row_factory = None
+        for row in rows:
+            yield self._row_to_event(row)
 
-    def get_high_risk_sessions(self, threshold: float = 70.0, limit: int = 20) -> list[Session]:
+    def get_high_risk_sessions(
+        self, threshold: float = 70.0, limit: int = 20, project_dir: str | None = None
+    ) -> list[Session]:
         """Get sessions that exceeded risk threshold."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
+        conn = self._connect()
+        conn.row_factory = sqlite3.Row
+        if project_dir:
+            rows = conn.execute(
+                """
+                SELECT * FROM sessions
+                WHERE peak_risk_score >= ? AND project_dir = ?
+                ORDER BY peak_risk_score DESC LIMIT ?
+                """,
+                (threshold, project_dir, limit),
+            ).fetchall()
+        else:
             rows = conn.execute(
                 """
                 SELECT * FROM sessions
@@ -183,55 +255,61 @@ class Database:
                 """,
                 (threshold, limit),
             ).fetchall()
-            return [self._row_to_session(row) for row in rows]
+        conn.row_factory = None
+        return [self._row_to_session(row) for row in rows]
 
     def purge_old_sessions(self, days: int = 90) -> int:
         """Delete sessions and events older than specified days. Returns count deleted."""
-        from datetime import datetime, timedelta
+        from datetime import timedelta
 
-        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
-            # Delete events first (foreign key)
-            conn.execute(
-                """
-                DELETE FROM risk_events
-                WHERE session_id IN (
-                    SELECT id FROM sessions WHERE started_at < ?
-                )
-                """,
-                (cutoff,),
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        conn = self._connect()
+        # Delete events first (foreign key)
+        conn.execute(
+            """
+            DELETE FROM risk_events
+            WHERE session_id IN (
+                SELECT id FROM sessions WHERE started_at < ?
             )
-            # Delete sessions
-            cursor = conn.execute(
-                "DELETE FROM sessions WHERE started_at < ?",
-                (cutoff,),
-            )
-            return cursor.rowcount
+            """,
+            (cutoff,),
+        )
+        # Delete sessions
+        cursor = conn.execute(
+            "DELETE FROM sessions WHERE started_at < ?",
+            (cutoff,),
+        )
+        conn.commit()
+        return cursor.rowcount
 
     def get_stats(self) -> dict:
         """Get aggregate statistics for health check."""
-        with sqlite3.connect(self.db_path) as conn:
-            total = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-            high_risk = conn.execute(
-                "SELECT COUNT(*) FROM sessions WHERE peak_risk_score >= 70"
-            ).fetchone()[0]
-            total_events = conn.execute("SELECT COUNT(*) FROM risk_events").fetchone()[0]
-            return {
-                "total_sessions": total,
-                "high_risk_sessions": high_risk,
-                "total_events": total_events,
-                "database_path": str(self.db_path),
-            }
+        conn = self._connect()
+        total = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        high_risk = conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE peak_risk_score >= 70"
+        ).fetchone()[0]
+        total_events = conn.execute("SELECT COUNT(*) FROM risk_events").fetchone()[0]
+        return {
+            "total_sessions": total,
+            "high_risk_sessions": high_risk,
+            "total_events": total_events,
+            "database_path": str(self.db_path),
+        }
 
     @staticmethod
     def _row_to_session(row: sqlite3.Row) -> Session:
         """Convert a database row to a Session."""
-        from datetime import datetime
+        # Read project_dir if column exists
+        try:
+            project_dir = row["project_dir"]
+        except (IndexError, KeyError):
+            project_dir = None
 
         return Session(
             id=row["id"],
-            started_at=datetime.fromisoformat(row["started_at"]),
-            ended_at=datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
+            started_at=_parse_datetime(row["started_at"]),
+            ended_at=_parse_datetime(row["ended_at"]) if row["ended_at"] else None,
             instruction_source=row["instruction_source"],
             instruction_hash=row["instruction_hash"],
             final_risk_score=row["final_risk_score"],
@@ -239,13 +317,12 @@ class Database:
             total_tool_calls=row["total_tool_calls"] or 0,
             total_agent_spawns=row["total_agent_spawns"] or 0,
             outcome=SessionOutcome(row["outcome"]),
+            project_dir=project_dir,
         )
 
     @staticmethod
     def _row_to_event(row: sqlite3.Row) -> RiskEvent:
         """Convert a database row to a RiskEvent."""
-        from datetime import datetime
-
         risk_score = None
         if row["risk_score_factors"]:
             factors = json.loads(row["risk_score_factors"])
@@ -254,7 +331,7 @@ class Database:
         return RiskEvent(
             id=row["id"],
             session_id=row["session_id"],
-            timestamp=datetime.fromisoformat(row["timestamp"]),
+            timestamp=_parse_datetime(row["timestamp"]),
             event_type=EventType(row["event_type"]),
             tool_name=row["tool_name"],
             context_tokens=row["context_tokens"],

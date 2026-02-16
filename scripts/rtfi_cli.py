@@ -22,7 +22,7 @@ from rtfi.storage.database import Database
 def cmd_sessions(args):
     """List recent sessions."""
     db = Database()
-    sessions = db.get_recent_sessions(limit=args.limit)
+    sessions = db.get_recent_sessions(limit=args.limit, project_dir=args.project)
 
     if not sessions:
         print("No sessions recorded yet.")
@@ -53,7 +53,9 @@ def cmd_sessions(args):
 def cmd_risky(args):
     """Show high-risk sessions."""
     db = Database()
-    sessions = db.get_high_risk_sessions(threshold=args.threshold, limit=args.limit)
+    sessions = db.get_high_risk_sessions(
+        threshold=args.threshold, limit=args.limit, project_dir=args.project
+    )
 
     if not sessions:
         print(f"No sessions exceeded risk threshold {args.threshold}.")
@@ -79,15 +81,12 @@ def cmd_show(args):
     """Show session details."""
     db = Database()
 
-    # Find session by prefix
-    all_sessions = db.get_recent_sessions(limit=1000)
-    matches = [s for s in all_sessions if s.id.startswith(args.session_id)]
+    # Use SQL prefix lookup (M3) instead of loading all sessions
+    session = db.find_session_by_prefix(args.session_id)
 
-    if not matches:
+    if not session:
         print(f"Session not found: {args.session_id}")
         return
-
-    session = matches[0]
 
     print(f"\nSession: {session.id}")
     print(f"Started: {session.started_at}")
@@ -121,24 +120,14 @@ def cmd_show(args):
 def cmd_status(args):
     """Show RTFI status."""
     db = Database()
-
-    all_sessions = db.get_recent_sessions(limit=10000)
-    high_risk = [s for s in all_sessions if s.peak_risk_score >= 70]
+    stats = db.get_stats()
 
     print("\nRTFI Status")
     print("=" * 40)
-    print(f"Database: {db.db_path}")
-    print(f"Total Sessions: {len(all_sessions)}")
-    print(f"High-Risk Sessions: {len(high_risk)}")
-
-    if all_sessions:
-        avg_risk = sum(s.peak_risk_score for s in all_sessions) / len(all_sessions)
-        print(f"Average Peak Risk: {avg_risk:.1f}")
-
-        total_tools = sum(s.total_tool_calls for s in all_sessions)
-        total_agents = sum(s.total_agent_spawns for s in all_sessions)
-        print(f"Total Tool Calls: {total_tools}")
-        print(f"Total Agent Spawns: {total_agents}")
+    print(f"Database: {stats['database_path']}")
+    print(f"Total Sessions: {stats['total_sessions']}")
+    print(f"High-Risk Sessions: {stats['high_risk_sessions']}")
+    print(f"Total Events: {stats['total_events']}")
 
 
 def cmd_health(args):
@@ -149,6 +138,15 @@ def cmd_health(args):
     print("=" * 50)
 
     errors = []
+
+    # Check dependencies
+    try:
+        import pydantic
+
+        print(f"[OK] pydantic {pydantic.__version__}")
+    except ImportError:
+        errors.append("pydantic not installed")
+        print("[ERROR] pydantic not installed")
 
     # Check database
     try:
@@ -201,11 +199,15 @@ def main():
     # sessions command
     sessions_parser = subparsers.add_parser("sessions", help="List recent sessions")
     sessions_parser.add_argument("--limit", "-n", type=int, default=20)
+    sessions_parser.add_argument("--project", "-p", type=str, default=None,
+                                 help="Filter by project directory")
 
     # risky command
     risky_parser = subparsers.add_parser("risky", help="Show high-risk sessions")
     risky_parser.add_argument("--threshold", "-t", type=float, default=70.0)
     risky_parser.add_argument("--limit", "-n", type=int, default=20)
+    risky_parser.add_argument("--project", "-p", type=str, default=None,
+                              help="Filter by project directory")
 
     # show command
     show_parser = subparsers.add_parser("show", help="Show session details")

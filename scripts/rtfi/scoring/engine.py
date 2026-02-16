@@ -36,6 +36,32 @@ class SessionState:
                 t for t in self.tool_calls_timestamps if t.timestamp() > two_minutes_ago
             ]
 
+    def to_dict(self) -> dict:
+        """Serialize mutable state fields to a dict for persistence."""
+        return {
+            "tokens": self.tokens,
+            "active_agents": self.active_agents,
+            "steps_since_confirm": self.steps_since_confirm,
+            "tool_timestamps": [t.isoformat() for t in self.tool_calls_timestamps],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict, session: Session) -> "SessionState":
+        """Restore session state from a persisted dict."""
+        timestamps = []
+        for ts in data.get("tool_timestamps", []):
+            try:
+                timestamps.append(datetime.fromisoformat(ts))
+            except (ValueError, TypeError):
+                continue
+        return cls(
+            session=session,
+            tokens=data.get("tokens", 0),
+            active_agents=data.get("active_agents", 0),
+            steps_since_confirm=data.get("steps_since_confirm", 0),
+            tool_calls_timestamps=timestamps,
+        )
+
 
 class RiskEngine:
     """Core risk scoring engine."""
@@ -52,6 +78,10 @@ class RiskEngine:
     def start_session(self, session: Session) -> None:
         """Begin tracking a new session."""
         self._sessions[session.id] = SessionState(session=session)
+
+    def restore_session(self, session: Session, state_dict: dict) -> None:
+        """Restore a session with persisted state."""
+        self._sessions[session.id] = SessionState.from_dict(state_dict, session)
 
     def end_session(self, session_id: str) -> Session | None:
         """End and return a session."""

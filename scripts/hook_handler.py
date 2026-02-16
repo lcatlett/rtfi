@@ -4,6 +4,7 @@
 import json
 import logging
 import os
+import subprocess
 import sys
 import uuid
 from datetime import datetime
@@ -35,6 +36,26 @@ audit_logger.setLevel(logging.INFO)
 # Add rtfi package to path
 script_dir = Path(__file__).parent
 sys.path.insert(0, str(script_dir))
+
+# Check and install dependencies BEFORE importing rtfi modules
+try:
+    import pydantic
+except ImportError:
+    logger.info("pydantic not found, attempting to install...")
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "--user", "-q", "pydantic>=2.0.0"],
+        )
+        logger.info("pydantic installed successfully")
+        # Re-import to verify
+        import pydantic
+    except (subprocess.CalledProcessError, ImportError) as e:
+        logger.error(f"Failed to install pydantic: {e}")
+        print(json.dumps({
+            "continue": True,
+            "systemMessage": "RTFI: Missing dependency. Please run: pip3 install pydantic>=2.0.0"
+        }))
+        sys.exit(0)
 
 from rtfi.models.events import EventType, RiskEvent, Session, SessionOutcome
 from rtfi.scoring.engine import RiskEngine
@@ -107,10 +128,37 @@ def validate_env_file_path(env_file: str | None) -> str | None:
 
 def load_settings() -> dict:
     """Load user settings from .claude/rtfi.local.md or defaults."""
+    # Parse threshold with validation (C4)
+    try:
+        threshold = float(os.environ.get("RTFI_THRESHOLD", 70.0))
+        if not (0 <= threshold <= 100):
+            logger.warning(f"RTFI_THRESHOLD={threshold} out of range 0-100, using default 70.0")
+            threshold = 70.0
+    except (ValueError, TypeError):
+        logger.warning(
+            f"Invalid RTFI_THRESHOLD={os.environ.get('RTFI_THRESHOLD')!r}, using default 70.0"
+        )
+        threshold = 70.0
+
+    # Parse retention_days with validation (C4)
+    try:
+        retention_days = int(os.environ.get("RTFI_RETENTION_DAYS", 90))
+        if not (1 <= retention_days <= 3650):
+            logger.warning(
+                f"RTFI_RETENTION_DAYS={retention_days} out of range 1-3650, using default 90"
+            )
+            retention_days = 90
+    except (ValueError, TypeError):
+        logger.warning(
+            f"Invalid RTFI_RETENTION_DAYS={os.environ.get('RTFI_RETENTION_DAYS')!r}, "
+            "using default 90"
+        )
+        retention_days = 90
+
     settings = {
-        "threshold": float(os.environ.get("RTFI_THRESHOLD", 70.0)),
+        "threshold": threshold,
         "action_mode": os.environ.get("RTFI_ACTION_MODE", "alert"),
-        "retention_days": int(os.environ.get("RTFI_RETENTION_DAYS", 90)),
+        "retention_days": retention_days,
     }
 
     # Validate action_mode from env
@@ -161,6 +209,31 @@ settings = load_settings()
 engine = RiskEngine(threshold=settings["threshold"])
 
 
+def _hydrate_session(session_id: str) -> bool:
+    """Load session and its persisted state into the engine. Returns True if successful."""
+    if engine.get_session(session_id):
+        return True  # Already hydrated
+    session = db.get_session(session_id)
+    if not session:
+        return False
+    state_dict = db.load_session_state(session_id)
+    if state_dict:
+        engine.restore_session(session, state_dict)
+    else:
+        engine.start_session(session)
+    return True
+
+
+def _persist_state(session_id: str) -> None:
+    """Save the engine's current session state to the database."""
+    state = engine._sessions.get(session_id)
+    if state:
+        # save_session first (INSERT OR REPLACE clears session_state),
+        # then save_session_state to persist the mutable state
+        db.save_session(state.session)
+        db.save_session_state(session_id, state.to_dict())
+
+
 def handle_session_start(hook_data: dict) -> dict:
     """Handle SessionStart - initialize new session."""
     validated = validate_hook_data(hook_data)
@@ -207,6 +280,14 @@ def handle_pre_tool_use(hook_data: dict) -> dict:
         engine.start_session(session)
         db.save_session(session)
         log_audit("SESSION_AUTO_START", session_id, {})
+    else:
+        # Hydrate session state from DB (C1 fix)
+        if not _hydrate_session(session_id):
+            # Session ID set but not in DB — create fresh
+            session = Session(id=session_id)
+            engine.start_session(session)
+            db.save_session(session)
+            log_audit("SESSION_AUTO_START", session_id, {})
 
     tool_name = validated.get("tool_name", "unknown")
 
@@ -223,16 +304,11 @@ def handle_pre_tool_use(hook_data: dict) -> dict:
         metadata={"hook": "pre_tool_use"},
     )
 
-    try:
-        score = engine.process_event(event)
-        db.save_event(event)
-    except ValueError:
-        # Session not found, re-initialize
-        session = Session(id=session_id)
-        engine.start_session(session)
-        db.save_session(session)
-        score = engine.process_event(event)
-        db.save_event(event)
+    score = engine.process_event(event)
+    db.save_event(event)
+
+    # Persist updated state back to DB (C1 fix)
+    _persist_state(session_id)
 
     result = {"continue": True}
 
@@ -280,6 +356,10 @@ def handle_post_tool_use(hook_data: dict) -> dict:
     if not session_id:
         return {"continue": True}
 
+    # Hydrate session state from DB
+    if not _hydrate_session(session_id):
+        return {"continue": True}
+
     event = RiskEvent(
         session_id=session_id,
         event_type=EventType.RESPONSE,
@@ -288,11 +368,9 @@ def handle_post_tool_use(hook_data: dict) -> dict:
         metadata={"hook": "post_tool_use"},
     )
 
-    try:
-        engine.process_event(event)
-        db.save_event(event)
-    except ValueError:
-        pass  # Session not found, ignore
+    engine.process_event(event)
+    db.save_event(event)
+    _persist_state(session_id)
 
     return {"continue": True}
 
@@ -304,11 +382,37 @@ def handle_stop(hook_data: dict) -> dict:
     if not session_id:
         return {"decision": "approve"}
 
+    # Hydrate session state from DB before ending (C2 fix)
+    _hydrate_session(session_id)
+
     session = engine.end_session(session_id)
+
+    # Fallback: load directly from DB if engine didn't have it
+    if not session:
+        session = db.get_session(session_id)
+
     if session:
-        score = engine.get_current_score(session_id)
-        session.final_risk_score = score.total if score else 0
+        # Calculate final score from persisted state
+        state_dict = db.load_session_state(session_id)
+        if state_dict:
+            from rtfi.scoring.engine import SessionState
+
+            temp_state = SessionState.from_dict(state_dict, session)
+            from rtfi.models.events import RiskScore
+
+            final_score = RiskScore.calculate(
+                tokens=temp_state.tokens,
+                active_agents=temp_state.active_agents,
+                steps_since_confirm=temp_state.steps_since_confirm,
+                tools_per_minute=temp_state.tools_per_minute,
+                threshold=engine.threshold,
+            )
+            session.final_risk_score = final_score.total
+        else:
+            session.final_risk_score = session.peak_risk_score
+
         session.outcome = SessionOutcome.COMPLETED
+        session.ended_at = datetime.now()
         db.save_session(session)
 
         log_audit(

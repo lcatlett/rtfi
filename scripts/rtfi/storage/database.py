@@ -1,6 +1,7 @@
 """SQLite storage for sessions and events."""
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Iterator
@@ -13,7 +14,7 @@ from rtfi.models.events import (
     SessionOutcome,
 )
 
-DEFAULT_DB_PATH = Path.home() / ".rtfi" / "rtfi.db"
+DEFAULT_DB_PATH = Path(os.environ.get("RTFI_DB_PATH", str(Path.home() / ".rtfi" / "rtfi.db")))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -61,6 +62,11 @@ class Database:
         """Initialize database schema."""
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(SCHEMA)
+            # Migration: add session_state column if missing
+            cursor = conn.execute("PRAGMA table_info(sessions)")
+            columns = {row[1] for row in cursor.fetchall()}
+            if "session_state" not in columns:
+                conn.execute("ALTER TABLE sessions ADD COLUMN session_state TEXT")
 
     def save_session(self, session: Session) -> None:
         """Save or update a session."""
@@ -86,6 +92,24 @@ class Database:
                     session.outcome.value,
                 ),
             )
+
+    def save_session_state(self, session_id: str, state_dict: dict) -> None:
+        """Persist session state as JSON."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE sessions SET session_state = ? WHERE id = ?",
+                (json.dumps(state_dict), session_id),
+            )
+
+    def load_session_state(self, session_id: str) -> dict | None:
+        """Load persisted session state."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT session_state FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+            if row and row[0]:
+                return json.loads(row[0])
+        return None
 
     def save_event(self, event: RiskEvent) -> int:
         """Save an event and return its ID."""

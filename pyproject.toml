@@ -1,8 +1,8 @@
 [project]
 name = "rtfi-plugin"
-version = "0.1.0"
+version = "0.1.1"
 description = "RTFI Claude Code Plugin - Real-Time Instruction Compliance Risk Scoring"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 
 dependencies = [
@@ -22,7 +22,7 @@ testpaths = ["tests"]
 pythonpath = ["scripts"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
@@ -30,7 +30,7 @@ ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]

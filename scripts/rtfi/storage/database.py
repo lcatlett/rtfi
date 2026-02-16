@@ -55,8 +55,13 @@ class Database:
 
     def __init__(self, db_path: Path | None = None):
         self.db_path = db_path or DEFAULT_DB_PATH
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._init_schema()
+        # Restrict database file permissions (M8)
+        try:
+            self.db_path.chmod(0o600)
+        except OSError:
+            pass
 
     def _init_schema(self) -> None:
         """Initialize database schema."""

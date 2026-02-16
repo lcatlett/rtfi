@@ -9,6 +9,13 @@ from pathlib import Path
 script_dir = Path(__file__).parent
 sys.path.insert(0, str(script_dir))
 
+# Check dependencies (no auto-install — H5)
+try:
+    import pydantic  # noqa: F401
+except ImportError:
+    print("Error: Missing dependency 'pydantic'. Run: pip3 install pydantic>=2.0.0")
+    sys.exit(1)
+
 from rtfi.storage.database import Database
 
 

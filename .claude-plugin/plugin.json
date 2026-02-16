@@ -1,6 +1,6 @@
 {
   "name": "rtfi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Real-Time Instruction Compliance Risk Scoring - predicts when AI sessions are at risk of ignoring your instructions",
   "author": {
     "name": "RTFI Team"

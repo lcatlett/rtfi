@@ -3,30 +3,36 @@
 
 import json
 import logging
+import logging.handlers
 import os
-import subprocess
 import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-# Configure logging
+# Configure logging with rotation (H8)
 LOG_DIR = Path.home() / ".rtfi"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)  # M8: restrict permissions
+
+MAX_INPUT_SIZE = 1_000_000  # 1MB stdin limit (M9)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler(LOG_DIR / "rtfi.log"),
+        logging.handlers.RotatingFileHandler(
+            LOG_DIR / "rtfi.log", maxBytes=5_000_000, backupCount=3
+        ),
     ],
 )
 logger = logging.getLogger("rtfi")
 
-# Audit logger for compliance
+# Audit logger for compliance with rotation (H8)
 audit_logger = logging.getLogger("rtfi.audit")
-audit_handler = logging.FileHandler(LOG_DIR / "audit.log")
+audit_handler = logging.handlers.RotatingFileHandler(
+    LOG_DIR / "audit.log", maxBytes=5_000_000, backupCount=3
+)
 audit_handler.setFormatter(
     logging.Formatter("%(asctime)s|%(message)s")
 )
@@ -37,25 +43,16 @@ audit_logger.setLevel(logging.INFO)
 script_dir = Path(__file__).parent
 sys.path.insert(0, str(script_dir))
 
-# Check and install dependencies BEFORE importing rtfi modules
+# Check dependencies BEFORE importing rtfi modules (no auto-install — H5)
 try:
-    import pydantic
+    import pydantic  # noqa: F401
 except ImportError:
-    logger.info("pydantic not found, attempting to install...")
-    try:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--user", "-q", "pydantic>=2.0.0"],
-        )
-        logger.info("pydantic installed successfully")
-        # Re-import to verify
-        import pydantic
-    except (subprocess.CalledProcessError, ImportError) as e:
-        logger.error(f"Failed to install pydantic: {e}")
-        print(json.dumps({
-            "continue": True,
-            "systemMessage": "RTFI: Missing dependency. Please run: pip3 install pydantic>=2.0.0"
-        }))
-        sys.exit(0)
+    logger.error("RTFI: Missing dependency 'pydantic'. Run: pip3 install pydantic>=2.0.0")
+    print(json.dumps({
+        "continue": True,
+        "systemMessage": "RTFI: Missing dependency 'pydantic'. Run: pip3 install pydantic>=2.0.0"
+    }))
+    sys.exit(0)
 
 from rtfi.models.events import EventType, RiskEvent, Session, SessionOutcome
 from rtfi.scoring.engine import RiskEngine
@@ -454,7 +451,7 @@ def main():
 
         # Read hook data from stdin
         try:
-            stdin_data = sys.stdin.read()
+            stdin_data = sys.stdin.read(MAX_INPUT_SIZE)
             hook_data = json.loads(stdin_data) if stdin_data else {}
         except json.JSONDecodeError as e:
             logger.warning(f"Invalid JSON in hook input: {e}")

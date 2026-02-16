@@ -1,6 +1,6 @@
 {
   "name": "rtfi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "RTFI - Real-Time Instruction Compliance Risk Scoring",
   "description": "Predicts when AI sessions are at risk of ignoring your instructions, enabling proactive intervention before failures occur. Tracks context length, agent fanout, autonomy depth, and decision velocity to calculate a real-time compliance risk score.",
   "author": {
@@ -31,7 +31,7 @@
     "skills": 1
   },
   "requirements": {
-    "python": ">=3.11",
+    "python": ">=3.10",
     "dependencies": ["pydantic>=2.0.0"]
   }
 }

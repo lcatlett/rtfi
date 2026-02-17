@@ -107,9 +107,17 @@ class RiskEngine:
         self,
         threshold: float = 70.0,
         on_threshold_exceeded: Callable[[Session, RiskScore], None] | None = None,
+        max_tokens: int = 128000,
+        max_agents: int = 5,
+        max_steps: int = 10,
+        max_tools_per_min: float = 20.0,
     ):
         self.threshold = threshold
         self.on_threshold_exceeded = on_threshold_exceeded
+        self.max_tokens = max_tokens
+        self.max_agents = max_agents
+        self.max_steps = max_steps
+        self.max_tools_per_min = max_tools_per_min
         self._sessions: dict[str, SessionState] = {}
 
     def start_session(self, session: Session) -> None:
@@ -161,13 +169,17 @@ class RiskEngine:
             if event.context_tokens:
                 state.tokens = event.context_tokens
 
-        # Calculate new risk score
+        # Calculate new risk score (L6: configurable thresholds)
         score = RiskScore.calculate(
             tokens=state.tokens,
             active_agents=state.active_agents,
             steps_since_confirm=state.steps_since_confirm,
             tools_per_minute=state.tools_per_minute,
             threshold=self.threshold,
+            max_tokens=self.max_tokens,
+            max_agents=self.max_agents,
+            max_steps=self.max_steps,
+            max_tools_per_min=self.max_tools_per_min,
         )
 
         # Track peak score
@@ -193,4 +205,8 @@ class RiskEngine:
             steps_since_confirm=state.steps_since_confirm,
             tools_per_minute=state.tools_per_minute,
             threshold=self.threshold,
+            max_tokens=self.max_tokens,
+            max_agents=self.max_agents,
+            max_steps=self.max_steps,
+            max_tools_per_min=self.max_tools_per_min,
         )

@@ -45,8 +45,12 @@ class RiskScore(BaseModel):
         steps_since_confirm: int,
         tools_per_minute: float,
         threshold: float = 70.0,
+        max_tokens: int = 128000,
+        max_agents: int = 5,
+        max_steps: int = 10,
+        max_tools_per_min: float = 20.0,
     ) -> "RiskScore":
-        """Calculate risk score from session state."""
+        """Calculate risk score from session state (L6: configurable thresholds)."""
         weights = {
             "context_length": 0.25,
             "agent_fanout": 0.30,
@@ -55,10 +59,10 @@ class RiskScore(BaseModel):
         }
 
         factors = {
-            "context_length": min(1.0, tokens / 128000),
-            "agent_fanout": min(1.0, active_agents / 5),
-            "autonomy_depth": min(1.0, steps_since_confirm / 10),
-            "decision_velocity": min(1.0, tools_per_minute / 20),
+            "context_length": min(1.0, tokens / max_tokens),
+            "agent_fanout": min(1.0, active_agents / max_agents),
+            "autonomy_depth": min(1.0, steps_since_confirm / max_steps),
+            "decision_velocity": min(1.0, tools_per_minute / max_tools_per_min),
         }
 
         total = sum(factors[k] * weights[k] for k in weights) * 100

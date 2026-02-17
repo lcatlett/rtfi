@@ -13,7 +13,7 @@ sys.path.insert(0, str(script_dir))
 try:
     import pydantic  # noqa: F401
 except ImportError:
-    print("Error: Missing dependency 'pydantic'. Run: pip3 install pydantic>=2.0.0")
+    print("Error: Missing dependency 'pydantic'. Run: uv pip install pydantic>=2.0.0 (or pip3 install pydantic>=2.0.0)")
     sys.exit(1)
 
 from rtfi.storage.database import Database
@@ -130,6 +130,92 @@ def cmd_status(args):
     print(f"Total Events: {stats['total_events']}")
 
 
+def cmd_setup(args):
+    """First-run setup wizard (L5)."""
+    import os
+
+    print("\nRTFI Setup")
+    print("=" * 50)
+
+    errors = []
+
+    # 1. Check Python version
+    v = sys.version_info
+    if v >= (3, 10):
+        print(f"[OK] Python {v.major}.{v.minor}.{v.micro}")
+    else:
+        errors.append(f"Python >= 3.10 required, found {v.major}.{v.minor}")
+        print(f"[ERROR] Python {v.major}.{v.minor} — requires >= 3.10")
+
+    # 2. Check pydantic
+    try:
+        import pydantic
+        print(f"[OK] pydantic {pydantic.__version__}")
+    except ImportError:
+        errors.append("pydantic not installed")
+        print("[ERROR] pydantic not installed")
+        print("        Run: uv pip install pydantic>=2.0.0 (or pip3 install pydantic>=2.0.0)")
+
+    # 3. Create ~/.rtfi/ with correct permissions
+    rtfi_dir = Path.home() / ".rtfi"
+    rtfi_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    print(f"[OK] Directory: {rtfi_dir}")
+
+    # 4. Create default config.env if not exists
+    config_path = rtfi_dir / "config.env"
+    if not config_path.exists():
+        config_path.write_text(
+            "# RTFI Configuration\n"
+            "# See: https://github.com/your-org/rtfi\n"
+            "\n"
+            "# Risk score threshold (0-100)\n"
+            "threshold=70.0\n"
+            "\n"
+            "# Action when threshold exceeded: alert, block, confirm\n"
+            "action_mode=alert\n"
+            "\n"
+            "# Data retention in days (1-3650)\n"
+            "retention_days=90\n"
+            "\n"
+            "# Normalization thresholds (adjust for your workflow)\n"
+            "max_tokens=128000\n"
+            "max_agents=5\n"
+            "max_steps=10\n"
+            "max_tools_per_min=20.0\n"
+            "\n"
+            "# Optional StatsD metrics (uncomment to enable)\n"
+            "# statsd_host=localhost\n"
+            "# statsd_port=8125\n"
+        )
+        config_path.chmod(0o600)
+        print(f"[OK] Config created: {config_path}")
+    else:
+        print(f"[OK] Config exists: {config_path}")
+
+    # 5. Initialize database
+    try:
+        db = Database()
+        print(f"[OK] Database: {db.db_path}")
+    except Exception as e:
+        errors.append(f"Database error: {e}")
+        print(f"[ERROR] Database: {e}")
+
+    # 6. Run health check
+    print()
+    if errors:
+        print(f"[FAIL] Setup completed with {len(errors)} error(s):")
+        for err in errors:
+            print(f"  - {err}")
+        return 1
+    else:
+        print("[PASS] Setup complete! RTFI is ready.")
+        print("\nNext steps:")
+        print(f"  1. Edit {config_path} to customize settings")
+        print("  2. Configure hooks in your .claude/settings.json")
+        print("  3. Run: python3 scripts/rtfi_cli.py health")
+        return 0
+
+
 def cmd_health(args):
     """Run health check."""
     import os
@@ -219,6 +305,9 @@ def main():
     # health command
     subparsers.add_parser("health", help="Run health check")
 
+    # setup command (L5)
+    subparsers.add_parser("setup", help="First-run setup and environment validation")
+
     args = parser.parse_args()
 
     commands = {
@@ -227,6 +316,7 @@ def main():
         "show": cmd_show,
         "status": cmd_status,
         "health": cmd_health,
+        "setup": cmd_setup,
     }
 
     commands[args.command](args)

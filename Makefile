@@ -1,10 +1,10 @@
 .PHONY: test lint typecheck format install dev clean
 
 install:
-	pip install pydantic>=2.0.0
+	$(if $(shell command -v uv 2>/dev/null),uv pip install,pip install) pydantic>=2.0.0
 
 dev:
-	pip install pydantic>=2.0.0 pytest pytest-cov mypy ruff
+	$(if $(shell command -v uv 2>/dev/null),uv pip install,pip install) pydantic>=2.0.0 pytest pytest-cov mypy ruff
 
 test:
 	pytest tests/ -v --tb=short

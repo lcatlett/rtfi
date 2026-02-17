@@ -1,41 +1,67 @@
 #!/usr/bin/env python3
 """RTFI Hook Handler - processes Claude Code hook events for risk scoring."""
 
+import hashlib
+import hmac
 import json
+import json as json_module
 import logging
 import logging.handlers
 import os
+import socket
 import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Configure logging with rotation (H8)
+# Configure logging with rotation (H8) and structured JSON (M4)
 LOG_DIR = Path.home() / ".rtfi"
 LOG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)  # M8: restrict permissions
 
 MAX_INPUT_SIZE = 1_000_000  # 1MB stdin limit (M9)
 
+
+class JsonFormatter(logging.Formatter):
+    """JSON log formatter for structured logging (M4)."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry: dict[str, Any] = {
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "message": record.getMessage(),
+            "logger": record.name,
+            "module": record.module,
+            "function": record.funcName,
+        }
+        if record.exc_info and record.exc_info[0] is not None:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        if hasattr(record, "session_id"):
+            log_entry["session_id"] = record.session_id
+        if hasattr(record, "hook_type"):
+            log_entry["hook_type"] = record.hook_type
+        return json_module.dumps(log_entry)
+
+
+_json_formatter = JsonFormatter()
+
+_rtfi_handler = logging.handlers.RotatingFileHandler(
+    LOG_DIR / "rtfi.log", maxBytes=5_000_000, backupCount=3
+)
+_rtfi_handler.setFormatter(_json_formatter)
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.handlers.RotatingFileHandler(
-            LOG_DIR / "rtfi.log", maxBytes=5_000_000, backupCount=3
-        ),
-    ],
+    handlers=[_rtfi_handler],
 )
 logger = logging.getLogger("rtfi")
 
-# Audit logger for compliance with rotation (H8)
+# Audit logger for compliance with rotation (H8) and JSON format (M4)
 audit_logger = logging.getLogger("rtfi.audit")
 audit_handler = logging.handlers.RotatingFileHandler(
     LOG_DIR / "audit.log", maxBytes=5_000_000, backupCount=3
 )
-audit_handler.setFormatter(
-    logging.Formatter("%(asctime)s|%(message)s")
-)
+audit_handler.setFormatter(_json_formatter)
 audit_logger.addHandler(audit_handler)
 audit_logger.setLevel(logging.INFO)
 
@@ -47,23 +73,62 @@ sys.path.insert(0, str(script_dir))
 try:
     import pydantic  # noqa: F401
 except ImportError:
-    logger.error("RTFI: Missing dependency 'pydantic'. Run: pip3 install pydantic>=2.0.0")
+    logger.error("RTFI: Missing dependency 'pydantic'. Run: uv pip install pydantic>=2.0.0 (or pip3 install pydantic>=2.0.0)")
     print(json.dumps({
         "continue": True,
-        "systemMessage": "RTFI: Missing dependency 'pydantic'. Run: pip3 install pydantic>=2.0.0"
+        "systemMessage": "RTFI: Missing dependency 'pydantic'. Run: uv pip install pydantic>=2.0.0 (or pip3 install pydantic>=2.0.0)"
     }))
     sys.exit(0)
 
+from rtfi.metrics import get_statsd
 from rtfi.models.events import EventType, RiskEvent, Session, SessionOutcome
 from rtfi.scoring.engine import RiskEngine
 from rtfi.storage.database import Database
 
 
+def _get_audit_key() -> bytes:
+    """Get or create a machine-specific audit signing key (M5)."""
+    key_path = LOG_DIR / ".audit_key"
+    if key_path.exists():
+        return key_path.read_bytes()
+    key = os.urandom(32)
+    key_path.write_bytes(key)
+    key_path.chmod(0o600)
+    return key
+
+
+def sign_audit_entry(entry: str) -> str:
+    """Add HMAC-SHA256 signature to an audit log entry (M5)."""
+    key = _get_audit_key()
+    sig = hmac.new(key, entry.encode(), hashlib.sha256).hexdigest()
+    return f"{entry} [sig:{sig}]"
+
+
+def verify_audit_log(log_path: Path | None = None) -> list[dict]:
+    """Verify integrity of audit log entries. Returns list of results per line."""
+    log_path = log_path or (LOG_DIR / "audit.log")
+    key = _get_audit_key()
+    results = []
+    for i, line in enumerate(log_path.read_text().splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        sig_marker = " [sig:"
+        if sig_marker not in line:
+            results.append({"line": i, "valid": False, "reason": "no signature"})
+            continue
+        content, _, sig_part = line.rpartition(sig_marker)
+        sig = sig_part.rstrip("]")
+        expected = hmac.new(key, content.encode(), hashlib.sha256).hexdigest()
+        results.append({"line": i, "valid": hmac.compare_digest(sig, expected)})
+    return results
+
+
 def log_audit(event_type: str, session_id: str, details: dict) -> None:
-    """Log audit event for compliance tracking."""
-    audit_logger.info(
-        f"{event_type}|session={session_id}|{json.dumps(details, default=str)}"
-    )
+    """Log audit event with HMAC signature for integrity verification (M5)."""
+    entry = f"{event_type}|session={session_id}|{json.dumps(details, default=str)}"
+    signed = sign_audit_entry(entry)
+    audit_logger.info(signed)
 
 
 def validate_hook_data(hook_data: Any) -> dict:
@@ -124,86 +189,123 @@ def validate_env_file_path(env_file: str | None) -> str | None:
 
 
 def load_settings() -> dict:
-    """Load user settings from .claude/rtfi.local.md or defaults."""
-    # Parse threshold with validation (C4)
-    try:
-        threshold = float(os.environ.get("RTFI_THRESHOLD", 70.0))
-        if not (0 <= threshold <= 100):
-            logger.warning(f"RTFI_THRESHOLD={threshold} out of range 0-100, using default 70.0")
-            threshold = 70.0
-    except (ValueError, TypeError):
-        logger.warning(
-            f"Invalid RTFI_THRESHOLD={os.environ.get('RTFI_THRESHOLD')!r}, using default 70.0"
-        )
-        threshold = 70.0
+    """Load settings from config file and environment variables (M6).
 
-    # Parse retention_days with validation (C4)
-    try:
-        retention_days = int(os.environ.get("RTFI_RETENTION_DAYS", 90))
-        if not (1 <= retention_days <= 3650):
-            logger.warning(
-                f"RTFI_RETENTION_DAYS={retention_days} out of range 1-3650, using default 90"
-            )
-            retention_days = 90
-    except (ValueError, TypeError):
-        logger.warning(
-            f"Invalid RTFI_RETENTION_DAYS={os.environ.get('RTFI_RETENTION_DAYS')!r}, "
-            "using default 90"
-        )
-        retention_days = 90
-
-    settings = {
-        "threshold": threshold,
-        "action_mode": os.environ.get("RTFI_ACTION_MODE", "alert"),
-        "retention_days": retention_days,
+    Priority (highest wins):
+    1. Environment variables (RTFI_THRESHOLD, RTFI_ACTION_MODE, etc.)
+    2. Config file (~/.rtfi/config.env)
+    3. Legacy settings file (.claude/rtfi.local.md)
+    4. Built-in defaults
+    """
+    config: dict[str, Any] = {
+        "threshold": 70.0,
+        "retention_days": 90,
+        "action_mode": "alert",
+        "log_level": "INFO",
+        # Normalization thresholds (L6)
+        "max_tokens": 128000,
+        "max_agents": 5,
+        "max_steps": 10,
+        "max_tools_per_min": 20.0,
     }
 
-    # Validate action_mode from env
-    if settings["action_mode"] not in ("alert", "block", "confirm"):
-        settings["action_mode"] = "alert"
+    # Layer 1: Read config.env file (M6)
+    config_path = LOG_DIR / "config.env"
+    if config_path.exists():
+        try:
+            for line in config_path.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    config[key.strip().lower()] = value.strip()
+        except Exception as e:
+            logger.error(f"Error reading config file {config_path}: {e}")
 
-    # Check for settings file in project or home
+    # Layer 2: Legacy settings file (backward compat)
     settings_paths = [
         Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")) / ".claude" / "rtfi.local.md",
         Path.home() / ".claude" / "rtfi.local.md",
     ]
-
     for settings_path in settings_paths:
         if settings_path.exists():
             try:
                 content = settings_path.read_text()
-                # Parse simple key-value from markdown
                 for line in content.split("\n"):
                     line = line.strip()
                     if line.startswith("Risk score threshold"):
                         try:
-                            settings["threshold"] = float(line.split(":")[-1].strip())
+                            config["threshold"] = float(line.split(":")[-1].strip())
                         except ValueError:
-                            logger.warning(f"Invalid threshold in settings: {line}")
+                            pass
                     elif line.startswith("What happens when threshold exceeded"):
                         mode = line.split(":")[-1].strip().lower()
                         if mode in ("alert", "block", "confirm"):
-                            settings["action_mode"] = mode
-                        else:
-                            logger.warning(f"Invalid action_mode in settings: {mode}")
+                            config["action_mode"] = mode
                     elif line.startswith("Data retention days"):
                         try:
-                            settings["retention_days"] = int(line.split(":")[-1].strip())
+                            config["retention_days"] = int(line.split(":")[-1].strip())
                         except ValueError:
-                            logger.warning(f"Invalid retention_days in settings: {line}")
+                            pass
                 break
             except Exception as e:
                 logger.error(f"Error reading settings file {settings_path}: {e}")
 
-    logger.info(f"Loaded settings: threshold={settings['threshold']}, mode={settings['action_mode']}")
-    return settings
+    # Layer 3: Environment variables override everything (C4 validation)
+    _env_overrides: list[tuple[str, str, type, Any, tuple[float, float] | None]] = [
+        ("threshold", "RTFI_THRESHOLD", float, 70.0, (0, 100)),
+        ("retention_days", "RTFI_RETENTION_DAYS", int, 90, (1, 3650)),
+        ("action_mode", "RTFI_ACTION_MODE", str, "alert", None),
+        ("max_tokens", "RTFI_MAX_TOKENS", int, 128000, (1000, 10_000_000)),
+        ("max_agents", "RTFI_MAX_AGENTS", int, 5, (1, 1000)),
+        ("max_steps", "RTFI_MAX_STEPS", int, 10, (1, 1000)),
+        ("max_tools_per_min", "RTFI_MAX_TOOLS_PER_MIN", float, 20.0, (1, 1000)),
+    ]
+
+    for key, env_var, parser, default, bounds in _env_overrides:
+        env_val = os.environ.get(env_var)
+        if env_val is not None:
+            try:
+                parsed = parser(env_val)
+                if bounds and not (bounds[0] <= parsed <= bounds[1]):
+                    logger.warning(
+                        f"{env_var}={parsed} out of range {bounds[0]}-{bounds[1]}, "
+                        f"using default {default}"
+                    )
+                    config[key] = default
+                else:
+                    config[key] = parsed
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid {env_var}={env_val!r}, using default {default}")
+                config[key] = default
+        else:
+            # Ensure file-loaded string values are cast to proper types
+            try:
+                config[key] = parser(config[key])
+            except (ValueError, TypeError):
+                config[key] = default
+
+    # Validate action_mode
+    if config["action_mode"] not in ("alert", "block", "confirm"):
+        config["action_mode"] = "alert"
+
+    logger.info(f"Loaded settings: threshold={config['threshold']}, mode={config['action_mode']}")
+    return config
 
 
 # Global state for session tracking
 SESSION_ID_ENV = "RTFI_SESSION_ID"
 db = Database()
 settings = load_settings()
-engine = RiskEngine(threshold=settings["threshold"])
+engine = RiskEngine(
+    threshold=settings["threshold"],
+    max_tokens=settings["max_tokens"],
+    max_agents=settings["max_agents"],
+    max_steps=settings["max_steps"],
+    max_tools_per_min=settings["max_tools_per_min"],
+)
+statsd = get_statsd()  # L3: optional metrics export
 
 
 def _hydrate_session(session_id: str) -> bool:
@@ -307,6 +409,13 @@ def handle_pre_tool_use(hook_data: dict) -> dict:
     # Persist updated state back to DB (C1 fix)
     _persist_state(session_id)
 
+    # Emit metrics (L3)
+    if statsd:
+        statsd.gauge("risk_score", score.total)
+        statsd.incr("tool_calls")
+        if event_type == EventType.AGENT_SPAWN:
+            statsd.incr("agent_spawns")
+
     result = {"continue": True}
 
     if score.threshold_exceeded:
@@ -316,6 +425,9 @@ def handle_pre_tool_use(hook_data: dict) -> dict:
             f"autonomy={score.autonomy_depth:.2f}, velocity={score.decision_velocity:.2f}. "
             f"High probability of instruction non-compliance."
         )
+
+        if statsd:
+            statsd.incr("threshold_exceeded")
 
         log_audit(
             "THRESHOLD_EXCEEDED",
@@ -403,6 +515,10 @@ def handle_stop(hook_data: dict) -> dict:
                 steps_since_confirm=temp_state.steps_since_confirm,
                 tools_per_minute=temp_state.tools_per_minute,
                 threshold=engine.threshold,
+                max_tokens=engine.max_tokens,
+                max_agents=engine.max_agents,
+                max_steps=engine.max_steps,
+                max_tools_per_min=engine.max_tools_per_min,
             )
             session.final_risk_score = final_score.total
         else:
@@ -442,6 +558,9 @@ def handle_stop(hook_data: dict) -> dict:
 
 def main():
     """Entry point for hook execution."""
+    import time
+
+    _start_time = time.monotonic()
     try:
         if len(sys.argv) < 2:
             print(json.dumps({"continue": True, "error": "No hook type specified"}))
@@ -472,6 +591,11 @@ def main():
             result = {"continue": True}
 
         print(json.dumps(result))
+
+        # Emit hook latency metric (L3)
+        if statsd:
+            elapsed_ms = (time.monotonic() - _start_time) * 1000
+            statsd.timing("hook_latency_ms", elapsed_ms)
 
     except Exception as e:
         # Critical: Never let exceptions crash the hook

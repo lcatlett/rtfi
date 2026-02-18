@@ -64,6 +64,64 @@ python3 scripts/rtfi_cli.py setup
 | `/rtfi:status` | RTFI status and statistics |
 | `/rtfi:health` | Run health check |
 | `/rtfi:setup` | First-run setup and validation |
+| `/rtfi:dashboard` | Launch the web dashboard |
+| `/rtfi:demo` | Run a synthetic high-risk scenario against the live database |
+| `/rtfi:check` | Validate a session against declared constraints |
+
+## Web Dashboard
+
+RTFI includes a live web dashboard for customer demos and monitoring. It requires no extra dependencies — Python stdlib only, with HTMX loaded from CDN.
+
+```bash
+# Start the dashboard (opens browser automatically)
+python3 scripts/rtfi_dashboard.py
+
+# Specify a port or suppress browser
+python3 scripts/rtfi_dashboard.py --port 7430 --no-browser
+```
+
+Open **http://localhost:7430**. The dashboard shows:
+
+- **Live risk gauge** — glowing circle that updates every 2 seconds during an active Claude session, color-coded green / amber / red
+- **Factor bars** — real-time breakdown of context length, agent fanout, autonomy depth, and decision velocity
+- **Session history** — last 25 sessions, clickable rows with peak score badges
+- **Session detail** — full event timeline with per-event risk scores; navigates via HTMX without page reload
+
+Stop with `Ctrl+C`.
+
+## Demo and Compliance Validation
+
+Two scripts support live demos and post-session compliance analysis.
+
+### Synthetic scenario (`demo_scenario.py`)
+
+Drives the database with a scripted high-risk session so you can watch the gauge climb:
+
+```bash
+# Terminal 1 — keep the dashboard open
+python3 scripts/rtfi_dashboard.py
+
+# Terminal 2 — run the scenario (0.6s between events by default)
+python3 scripts/demo_scenario.py                    # combined (breaches ~75)
+python3 scripts/demo_scenario.py --scenario fanout  # 5 parallel agents
+python3 scripts/demo_scenario.py --scenario velocity # rapid tool calls
+python3 scripts/demo_scenario.py --fast             # instant (no delays)
+```
+
+### Compliance check (`demo_compliance_check.py`)
+
+Replays a session's event sequence and checks it against declared constraints:
+
+```bash
+python3 scripts/demo_compliance_check.py --latest          # most recent session
+python3 scripts/demo_compliance_check.py <session-id>      # by prefix
+python3 scripts/demo_compliance_check.py --latest --json   # machine-readable
+python3 scripts/demo_compliance_check.py --latest --constraints constraints.json
+```
+
+Default constraints checked: max 2 parallel agents, confirm every 5 steps, 80k token context guard, risk threshold ≤ 70. All thresholds are configurable via JSON file.
+
+Output: per-constraint PASS / WARN / FAIL verdict, exact violation location (step number, tool, timestamp), score decomposition, and the verbatim `systemMessage` RTFI sent to Claude at threshold breach.
 
 ## Configuration
 
@@ -133,9 +191,10 @@ python3 scripts/rtfi_cli.py health
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) - Technical design and implementation details
+- [Architecture](docs/ARCHITECTURE.md) - Technical design, C4 diagrams, ADRs
 - [Product Brief](docs/PRODUCT-BRIEF.md) - Problem statement and solution overview
 - [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
+- [Changelog](CHANGELOG.md) - Full version history
 
 ## License
 

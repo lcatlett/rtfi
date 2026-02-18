@@ -1,6 +1,6 @@
 [project]
 name = "rtfi-plugin"
-version = "0.1.1"
+version = "1.0.0"
 description = "RTFI Claude Code Plugin - Real-Time Instruction Compliance Risk Scoring"
 requires-python = ">=3.10"
 license = { text = "MIT" }

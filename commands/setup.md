@@ -1,7 +1,6 @@
 ---
 name: setup
 description: First-run setup and environment validation for RTFI
-arguments: []
 ---
 
 Run the RTFI setup wizard to validate your environment, install dependencies, and create default configuration:

@@ -2,8 +2,8 @@
 name: session-analyzer
 description: Analyzes high-risk RTFI sessions to identify root causes and suggest instruction improvements
 model: sonnet
-color: orange
-tools:
+color: yellow
+allowed-tools:
   - Bash
   - Read
   - Grep

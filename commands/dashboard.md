@@ -1,6 +1,8 @@
 ---
 name: dashboard
 description: Launch the RTFI web dashboard for live risk monitoring and session history
+allowed-tools:
+  - Bash
 ---
 
 Launch the RTFI web dashboard:

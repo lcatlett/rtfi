@@ -37,13 +37,13 @@ bash scripts/setup.sh
 Using [uv](https://docs.astral.sh/uv/) (recommended):
 
 ```bash
-uv pip install pydantic>=2.0.0
+uv pip install --system "pydantic>=2.0.0"
 ```
 
 Using pip:
 
 ```bash
-pip3 install pydantic>=2.0.0
+pip3 install "pydantic>=2.0.0"
 ```
 
 ### First-Run Setup

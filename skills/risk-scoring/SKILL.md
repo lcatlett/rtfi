@@ -1,7 +1,6 @@
 ---
 name: risk-scoring
 description: Use when discussing RTFI risk scores, compliance thresholds, or tuning risk factors. Provides guidance on interpreting scores and optimizing settings.
-version: 1.0.0
 ---
 
 # RTFI Risk Scoring

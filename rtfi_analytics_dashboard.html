@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RTFI Analytics</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous"></script>
+    <style>
+/* ── DESIGN TOKENS ─────────────────────────────────────────── */
+:root {
+    --bg: #F4F5F7;
+    --card: #FFFFFF;
+    --navy: #1B2A4A;
+    --navy-light: #2D4066;
+    --slate: #64748B;
+    --slate-light: #94A3B8;
+    --text: #1E293B;
+    --text-2: #475569;
+    --text-3: #94A3B8;
+    --red: #DC2626;
+    --red-bg: #FEF2F2;
+    --red-border: #FECACA;
+    --amber: #D97706;
+    --amber-bg: #FFFBEB;
+    --amber-border: #FDE68A;
+    --green: #059669;
+    --green-bg: #ECFDF5;
+    --green-border: #A7F3D0;
+    --blue: #2563EB;
+    --blue-bg: #EFF6FF;
+    --blue-border: #BFDBFE;
+    --purple: #7C3AED;
+    --purple-bg: #F5F3FF;
+    --purple-border: #DDD6FE;
+    --gap: 16px;
+    --r: 20px;
+    --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+    --shadow-lg: 0 4px 12px rgba(0,0,0,.08), 0 2px 4px rgba(0,0,0,.04);
+    --shadow-xl: 0 10px 30px rgba(0,0,0,.12);
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ── LAYOUT ────────────────────────────────────────────────── */
+.wrap { max-width: 1400px; margin: 0 auto; padding: 24px; }
+
+/* Header */
+.hdr {
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 16px; margin-bottom: 28px; padding: 0 4px;
+}
+.hdr-left h1 { font-size: 24px; font-weight: 700; color: var(--navy); letter-spacing: -.3px; }
+.hdr-left p { font-size: 13px; color: var(--slate); margin-top: 2px; }
+.filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.fg select {
+    padding: 8px 14px; border: 1px solid #E2E8F0; border-radius: 10px;
+    background: var(--card); color: var(--text); font-size: 13px; cursor: pointer;
+    transition: border-color .2s, box-shadow .2s; appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center; padding-right: 30px;
+}
+.fg select:hover { border-color: var(--blue); }
+.fg select:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
+
+/* ── BENTO GRID ────────────────────────────────────────────── */
+.bento {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    grid-auto-rows: minmax(0, auto);
+    gap: var(--gap);
+}
+
+/* Cards */
+.card {
+    background: var(--card); border-radius: var(--r); padding: 24px;
+    box-shadow: var(--shadow); transition: box-shadow .2s, transform .15s;
+    position: relative; overflow: hidden;
+}
+.card:hover { box-shadow: var(--shadow-lg); }
+.card.clickable { cursor: pointer; }
+.card.clickable:hover { transform: translateY(-1px); }
+.card-title {
+    font-size: 12px; font-weight: 600; color: var(--slate);
+    text-transform: uppercase; letter-spacing: .8px; margin-bottom: 8px;
+}
+.card canvas { max-height: 280px; }
+
+/* ── HERO KPIs (top-left prime real estate) ────────────────── */
+.hero-kpi { grid-column: span 4; padding: 28px 32px; }
+.hero-kpi .kpi-icon {
+    width: 44px; height: 44px; border-radius: 12px; display: flex;
+    align-items: center; justify-content: center; font-size: 20px; margin-bottom: 14px;
+}
+.hero-kpi .kpi-val { font-size: 40px; font-weight: 800; letter-spacing: -.5px; line-height: 1.1; }
+.hero-kpi .kpi-label { font-size: 14px; font-weight: 600; color: var(--text-2); margin-top: 4px; }
+.hero-kpi .kpi-sub { font-size: 12px; color: var(--slate-light); margin-top: 6px; }
+
+.hero-kpi.critical .kpi-icon { background: var(--red-bg); color: var(--red); }
+.hero-kpi.critical .kpi-val { color: var(--red); }
+.hero-kpi.warning .kpi-icon { background: var(--amber-bg); color: var(--amber); }
+.hero-kpi.warning .kpi-val { color: var(--amber); }
+.hero-kpi.ok .kpi-icon { background: var(--green-bg); color: var(--green); }
+.hero-kpi.ok .kpi-val { color: var(--green); }
+
+/* Secondary KPIs */
+.sec-kpi { grid-column: span 3; padding: 22px 24px; }
+.sec-kpi .kpi-val { font-size: 28px; font-weight: 700; color: var(--navy); letter-spacing: -.3px; }
+.sec-kpi .kpi-sub { font-size: 12px; color: var(--slate-light); margin-top: 4px; }
+
+/* Chart spans */
+.span-6 { grid-column: span 6; }
+.span-8 { grid-column: span 8; }
+.span-4 { grid-column: span 4; }
+.span-12 { grid-column: span 12; }
+
+/* ── BADGES ────────────────────────────────────────────────── */
+.badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 12px; border-radius: 20px; font-size: 12px; font-weight: 600;
+}
+.badge.hi { background: var(--red-bg); color: var(--red); border: 1px solid var(--red-border); }
+.badge.md { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber-border); }
+.badge.lo { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
+.obadge { display: inline-block; padding: 3px 12px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+.obadge.completed { background: var(--green-bg); color: var(--green); }
+.obadge.in_progress { background: var(--blue-bg); color: var(--blue); }
+
+/* ── DRILL-DOWN MODAL ──────────────────────────────────────── */
+.modal-overlay {
+    position: fixed; inset: 0; background: rgba(15,23,42,.45); backdrop-filter: blur(4px);
+    z-index: 1000; display: none; align-items: center; justify-content: center;
+    padding: 24px; opacity: 0; transition: opacity .25s;
+}
+.modal-overlay.show { display: flex; opacity: 1; }
+.modal {
+    background: var(--card); border-radius: var(--r); padding: 32px;
+    width: 100%; max-width: 960px; max-height: 85vh; overflow-y: auto;
+    box-shadow: var(--shadow-xl); position: relative;
+}
+.modal-close {
+    position: absolute; top: 16px; right: 16px; width: 36px; height: 36px;
+    border-radius: 10px; border: 1px solid #E2E8F0; background: var(--bg);
+    color: var(--slate); cursor: pointer; font-size: 18px;
+    display: flex; align-items: center; justify-content: center;
+    transition: background .15s, color .15s;
+}
+.modal-close:hover { background: #E2E8F0; color: var(--text); }
+.modal h2 { font-size: 18px; font-weight: 700; color: var(--navy); margin-bottom: 4px; }
+.modal .modal-sub { font-size: 13px; color: var(--slate); margin-bottom: 20px; }
+.modal-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 16px; }
+.modal-chart-wrap h4 { font-size: 13px; font-weight: 600; color: var(--text-2); margin-bottom: 10px; }
+.modal canvas { max-height: 250px; }
+
+/* ── RAW DATA PANEL ────────────────────────────────────────── */
+.raw-panel {
+    margin-top: 20px; background: var(--bg); border-radius: 12px; padding: 16px;
+    max-height: 240px; overflow-y: auto; font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 12px; line-height: 1.7; color: var(--text-2);
+}
+.raw-panel .raw-row { padding: 4px 0; border-bottom: 1px solid #E2E8F0; }
+.raw-panel .raw-row:last-child { border-bottom: none; }
+
+/* ── TABLE ─────────────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th {
+    text-align: left; padding: 12px 14px; border-bottom: 2px solid #E2E8F0;
+    color: var(--slate); font-weight: 600; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .6px; white-space: nowrap;
+    user-select: none; cursor: pointer; transition: color .15s;
+}
+thead th:hover { color: var(--navy); }
+tbody td { padding: 12px 14px; border-bottom: 1px solid #F1F5F9; }
+tbody tr { cursor: pointer; transition: background .15s; }
+tbody tr:hover { background: #F8FAFC; }
+
+/* ── NL QUERY BAR ──────────────────────────────────────────── */
+.nlq {
+    grid-column: span 12; background: var(--card); border-radius: var(--r);
+    padding: 20px 24px; box-shadow: var(--shadow); display: flex;
+    gap: 12px; align-items: center;
+}
+.nlq-icon { font-size: 20px; color: var(--purple); flex-shrink: 0; }
+.nlq input {
+    flex: 1; padding: 10px 16px; border: 1px solid #E2E8F0; border-radius: 12px;
+    font-size: 14px; color: var(--text); background: var(--bg);
+    transition: border-color .2s, box-shadow .2s;
+}
+.nlq input:focus { outline: none; border-color: var(--purple); box-shadow: 0 0 0 3px rgba(124,58,237,.1); }
+.nlq input::placeholder { color: var(--slate-light); }
+.nlq-btn {
+    padding: 10px 20px; border: none; border-radius: 12px; background: var(--purple);
+    color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: background .15s; flex-shrink: 0;
+}
+.nlq-btn:hover { background: #6D28D9; }
+.nlq-answer {
+    grid-column: span 12; background: var(--purple-bg); border: 1px solid var(--purple-border);
+    border-radius: var(--r); padding: 20px 24px; display: none;
+    font-size: 14px; color: var(--navy); line-height: 1.7;
+}
+.nlq-answer.show { display: block; }
+.nlq-answer strong { color: var(--purple); }
+
+/* ── TOOLTIP ───────────────────────────────────────────────── */
+.tip {
+    position: relative; display: inline-flex; align-items: center; gap: 4px;
+}
+.tip .tip-text {
+    visibility: hidden; opacity: 0; position: absolute; bottom: calc(100% + 8px); left: 50%;
+    transform: translateX(-50%); background: var(--navy); color: #fff; padding: 8px 14px;
+    border-radius: 10px; font-size: 12px; font-weight: 400; white-space: nowrap;
+    box-shadow: var(--shadow-lg); transition: opacity .2s, visibility .2s; z-index: 50;
+    pointer-events: none;
+}
+.tip .tip-text::after {
+    content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+    border: 5px solid transparent; border-top-color: var(--navy);
+}
+.tip:hover .tip-text { visibility: visible; opacity: 1; }
+
+/* ── FOOTER ────────────────────────────────────────────────── */
+.ft {
+    text-align: center; padding: 28px 0 12px; color: var(--slate-light);
+    font-size: 12px;
+}
+
+/* ── RESPONSIVE ────────────────────────────────────────────── */
+@media (max-width: 1024px) {
+    .hero-kpi { grid-column: span 6; }
+    .sec-kpi { grid-column: span 6; }
+    .span-6, .span-8, .span-4 { grid-column: span 12; }
+    .modal-charts { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+    .hero-kpi, .sec-kpi { grid-column: span 12; }
+    .wrap { padding: 12px; }
+    .bento { gap: 12px; }
+    .hdr { flex-direction: column; align-items: flex-start; }
+}
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <!-- Header -->
+    <header class="hdr">
+        <div class="hdr-left">
+            <h1>RTFI Analytics</h1>
+            <p>Real-Time Instruction Compliance Risk Scoring &mdash; Live data from ~/.rtfi/rtfi.db</p>
+        </div>
+        <div class="filters">
+            <div class="fg">
+                <select id="f-risk" onchange="D.filter()">
+                    <option value="all">All Risk Levels</option>
+                    <option value="high">High Risk (&ge;70)</option>
+                    <option value="elevated">Elevated (30-69)</option>
+                    <option value="normal">Normal (&lt;30)</option>
+                </select>
+            </div>
+            <div class="fg">
+                <select id="f-out" onchange="D.filter()">
+                    <option value="all">All Outcomes</option>
+                    <option value="completed">Completed</option>
+                    <option value="in_progress">In Progress</option>
+                </select>
+            </div>
+            <div class="fg">
+                <select id="f-interesting" onchange="D.filter()">
+                    <option value="interesting">Interesting Sessions</option>
+                    <option value="all">All 5,730 Sessions</option>
+                </select>
+            </div>
+        </div>
+    </header>
+
+    <!-- Bento Grid -->
+    <div class="bento">
+
+        <!-- ═══ ROW 1: Hero KPIs (prime real estate) ═══ -->
+        <div class="card hero-kpi critical clickable" id="kpi-highrisk" onclick="D.drillKPI('highrisk')">
+            <div class="kpi-icon">&#9888;</div>
+            <div class="kpi-val" id="k-hi">2</div>
+            <div class="kpi-label tip">High-Risk Sessions <span class="tip-text">Sessions with peak risk score &ge; 70 (breach threshold)</span></div>
+            <div class="kpi-sub" id="k-hi-s">Breached compliance threshold</div>
+        </div>
+
+        <div class="card hero-kpi warning clickable" id="kpi-factor" onclick="D.drillKPI('factor')">
+            <div class="kpi-icon">&#9881;</div>
+            <div class="kpi-val" id="k-fac">Agent Fanout</div>
+            <div class="kpi-label tip">Top Risk Factor <span class="tip-text">Factor weighted 30% &mdash; highest avg risk contribution across sessions</span></div>
+            <div class="kpi-sub" id="k-fac-s">30% weight &mdash; avg 13.2 risk on Task spawns</div>
+        </div>
+
+        <div class="card hero-kpi ok clickable" id="kpi-breach" onclick="D.drillKPI('breach')">
+            <div class="kpi-icon">&#9745;</div>
+            <div class="kpi-val" id="k-br">0.0%</div>
+            <div class="kpi-label tip">Breach Rate <span class="tip-text">Percentage of displayed sessions exceeding score 70</span></div>
+            <div class="kpi-sub" id="k-br-s">Across filtered sessions</div>
+        </div>
+
+        <!-- ═══ ROW 2: Secondary KPIs ═══ -->
+        <div class="card sec-kpi clickable" onclick="D.drillKPI('sessions')">
+            <div class="card-title tip">Total Sessions <span class="tip-text">Sessions matching current filter criteria</span></div>
+            <div class="kpi-val" id="k-total">25</div>
+            <div class="kpi-sub" id="k-total-s">of 5,730 in database</div>
+        </div>
+        <div class="card sec-kpi clickable" onclick="D.drillKPI('risk')">
+            <div class="card-title tip">Avg Peak Risk <span class="tip-text">Mean peak risk score across filtered sessions (0-100 scale)</span></div>
+            <div class="kpi-val" id="k-avg">0</div>
+            <div class="kpi-sub" id="k-avg-s">Normal range</div>
+        </div>
+        <div class="card sec-kpi clickable" onclick="D.drillKPI('events')">
+            <div class="card-title tip">Total Events <span class="tip-text">All risk events recorded: tool calls, agent spawns, checkpoints</span></div>
+            <div class="kpi-val" id="k-ev">5,629</div>
+            <div class="kpi-sub" id="k-ev-s">5,401 tools / 225 agents / 3 checkpoints</div>
+        </div>
+        <div class="card sec-kpi">
+            <div class="card-title tip">Highest Peak Score <span class="tip-text">Maximum risk score recorded in any single session</span></div>
+            <div class="kpi-val" id="k-peak" style="color:var(--red)">75.8</div>
+            <div class="kpi-sub" id="k-peak-s">Session b00b08a9 (combined scenario)</div>
+        </div>
+
+        <!-- ═══ NL Query Bar ═══ -->
+        <div class="nlq">
+            <span class="nlq-icon">&#128269;</span>
+            <input type="text" id="nlq-input" placeholder="Ask a question&hellip; e.g. &ldquo;Which sessions have the most agent spawns?&rdquo; or &ldquo;Show high-risk sessions from today&rdquo;" onkeydown="if(event.key==='Enter')D.nlQuery()">
+            <button class="nlq-btn" onclick="D.nlQuery()">Ask</button>
+        </div>
+        <div class="nlq-answer" id="nlq-answer"></div>
+
+        <!-- ═══ ROW 3: Main charts ═══ -->
+        <div class="card span-8">
+            <div class="card-title">Daily Session Volume &amp; Risk Trend</div>
+            <canvas id="c-daily" height="260"></canvas>
+        </div>
+        <div class="card span-4">
+            <div class="card-title">Session Outcomes</div>
+            <canvas id="c-outcomes" height="260"></canvas>
+        </div>
+
+        <!-- ═══ ROW 4: Analysis charts ═══ -->
+        <div class="card span-6">
+            <div class="card-title">Peak Risk Distribution</div>
+            <canvas id="c-hist" height="240"></canvas>
+        </div>
+        <div class="card span-6">
+            <div class="card-title">Tool Usage vs. Risk Level</div>
+            <canvas id="c-tools" height="240"></canvas>
+        </div>
+
+        <!-- ═══ ROW 5: Radar + Table ═══ -->
+        <div class="card span-4">
+            <div class="card-title">Risk Factor Profile</div>
+            <canvas id="c-factors" height="280"></canvas>
+        </div>
+        <div class="card span-8" style="padding-bottom:16px">
+            <div class="card-title">Session History <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--slate-light)">&mdash; click a row to drill down</span></div>
+            <div id="tbl" style="overflow-x:auto;margin-top:8px"></div>
+        </div>
+    </div>
+
+    <footer class="ft">RTFI Analytics &mdash; 5,730 sessions / 5,629 events &mdash; Generated Feb 18, 2026</footer>
+</div>
+
+<!-- Drill-down Modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="if(event.target===this)D.closeModal()">
+    <div class="modal">
+        <button class="modal-close" onclick="D.closeModal()">&times;</button>
+        <h2 id="modal-title">Detail</h2>
+        <div class="modal-sub" id="modal-sub"></div>
+        <div id="modal-body"></div>
+    </div>
+</div>
+
+<script>
+// ── REAL DATA FROM ~/.rtfi/rtfi.db ──────────────────────────────────
+
+const DAILY = [
+    {day:"2026-01-31",sessions:5,high:0,elevated:0,avg:0.7,tools:1,agents:0},
+    {day:"2026-02-06",sessions:117,high:0,elevated:0,avg:0,tools:0,agents:0},
+    {day:"2026-02-07",sessions:7,high:0,elevated:0,avg:0,tools:0,agents:0},
+    {day:"2026-02-08",sessions:412,high:0,elevated:0,avg:0,tools:0,agents:0},
+    {day:"2026-02-09",sessions:2730,high:0,elevated:0,avg:0,tools:0,agents:0},
+    {day:"2026-02-10",sessions:1218,high:0,elevated:0,avg:0,tools:0,agents:0},
+    {day:"2026-02-11",sessions:87,high:0,elevated:0,avg:0,tools:0,agents:0},
+    {day:"2026-02-16",sessions:55,high:0,elevated:9,avg:7.68,tools:38,agents:45},
+    {day:"2026-02-17",sessions:19,high:0,elevated:3,avg:6.95,tools:12,agents:15},
+    {day:"2026-02-18",sessions:1080,high:2,elevated:7,avg:3.86,tools:1069,agents:69},
+];
+
+const TOOL_USAGE = [
+    {tool:"Bash",count:2236,avg_risk:3.80},
+    {tool:"Read",count:1800,avg_risk:3.65},
+    {tool:"Glob",count:267,avg_risk:3.55},
+    {tool:"TodoWrite",count:226,avg_risk:3.50},
+    {tool:"Task",count:225,avg_risk:13.16},
+    {tool:"Edit",count:224,avg_risk:4.98},
+    {tool:"Grep",count:190,avg_risk:3.61},
+    {tool:"Write",count:166,avg_risk:5.63},
+    {tool:"WebFetch",count:37,avg_risk:3.50},
+    {tool:"MCP Tools",count:157,avg_risk:3.50},
+];
+
+const SESSIONS = [
+    {id:"ff790525",started:"2026-02-18T19:01:39Z",peak:73.79,final_risk:73.79,tools:10,agents:5,outcome:"completed",scenario:"fanout",project:"rtfi"},
+    {id:"dad77273",started:"2026-02-18T19:01:06Z",peak:43.91,final_risk:43.91,tools:15,agents:0,outcome:"completed",scenario:"velocity",project:"rtfi"},
+    {id:"86e0a810",started:"2026-02-18T18:55:05Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:".claude"},
+    {id:"b00b08a9",started:"2026-02-18T18:54:46Z",peak:75.79,final_risk:75.79,tools:12,agents:5,outcome:"completed",scenario:"combined",project:"rtfi"},
+    {id:"fb00f3ea",started:"2026-02-18T18:53:25Z",peak:57.84,final_risk:57.84,tools:6,agents:5,outcome:"completed",scenario:"fanout",project:"rtfi"},
+    {id:"df0e01fe",started:"2026-02-18T18:52:56Z",peak:61.81,final_risk:61.81,tools:11,agents:3,outcome:"completed",scenario:"combined",project:"rtfi"},
+    {id:"64e8f5c5",started:"2026-02-18T18:21:30Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:".claude"},
+    {id:"8c6b7623",started:"2026-02-18T16:17:44Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:".claude"},
+    {id:"a13df7a2",started:"2026-02-18T11:39:26Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:"kd"},
+    {id:"f011c5ca",started:"2026-02-17T08:25:38Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:"unknown"},
+    {id:"d6d5b0cc",started:"2026-02-17T03:44:28Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:"unknown"},
+    {id:"7eed00f5",started:"2026-02-17T03:39:48Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:"unknown"},
+    {id:"c65a9610",started:"2026-02-16T23:53:07Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:"unknown"},
+    {id:"test-thresh",started:"2026-02-16T23:52:54Z",peak:13.27,final_risk:null,tools:1,agents:0,outcome:"in_progress",scenario:"test",project:"unknown"},
+    {id:"a8041bbe",started:"2026-02-16T23:51:42Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:"unknown"},
+    {id:"d7d91a39",started:"2026-02-16T07:59:13Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:"unknown"},
+    {id:"5dbc2b06",started:"2026-02-16T07:56:42Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:"unknown"},
+    {id:"9fc59642",started:"2026-02-16T02:50:52Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:"unknown"},
+    {id:"95eaf164",started:"2026-02-16T02:50:32Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:"unknown"},
+    {id:"075e87d1",started:"2026-02-16T02:47:52Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:"unknown"},
+    {id:"7def0a93",started:"2026-02-16T02:41:18Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:"unknown"},
+    {id:"cross-50a4",started:"2026-02-16T02:38:47Z",peak:13.27,final_risk:null,tools:1,agents:0,outcome:"in_progress",scenario:"test",project:"unknown"},
+    {id:"097203ca",started:"2026-02-16T02:38:14Z",peak:30.0,final_risk:null,tools:0,agents:5,outcome:"in_progress",scenario:"agent-only",project:"unknown"},
+    {id:"792756ed",started:"2026-02-18T18:55:05Z",peak:7.0,final_risk:null,tools:2,agents:0,outcome:"in_progress",scenario:"real",project:".claude"},
+    {id:"d4298829",started:"2026-02-18T18:55:05Z",peak:3.5,final_risk:3.5,tools:1,agents:0,outcome:"completed",scenario:"real",project:".claude"},
+];
+
+const SESSION_EVENTS = {
+    "b00b08a9": [
+        {t:"Read",tokens:6000,score:4.67,cl:.047,af:0,ad:.1,dv:.05,exceeded:false},
+        {t:"checkpoint",tokens:0,score:2.17,cl:.047,af:0,ad:0,dv:.05,exceeded:false},
+        {t:"Read",tokens:10000,score:6.45,cl:.078,af:0,ad:.1,dv:.1,exceeded:false},
+        {t:"Glob",tokens:11000,score:10.15,cl:.086,af:0,ad:.2,dv:.15,exceeded:false},
+        {t:"Grep",tokens:12000,score:13.84,cl:.094,af:0,ad:.3,dv:.2,exceeded:false},
+        {t:"Task",tokens:15000,score:19.84,cl:.094,af:.2,ad:.3,dv:.2,exceeded:false},
+        {t:"Read",tokens:18000,score:24.52,cl:.141,af:.2,ad:.4,dv:.25,exceeded:false},
+        {t:"Read",tokens:19000,score:28.21,cl:.148,af:.2,ad:.5,dv:.3,exceeded:false},
+        {t:"Task",tokens:22000,score:34.21,cl:.148,af:.4,ad:.5,dv:.3,exceeded:false},
+        {t:"Task",tokens:28000,score:40.21,cl:.148,af:.6,ad:.5,dv:.3,exceeded:false},
+        {t:"Edit",tokens:30000,score:45.86,cl:.234,af:.6,ad:.6,dv:.35,exceeded:false},
+        {t:"Edit",tokens:32000,score:49.75,cl:.25,af:.6,ad:.7,dv:.4,exceeded:false},
+        {t:"Write",tokens:34000,score:53.64,cl:.266,af:.6,ad:.8,dv:.45,exceeded:false},
+        {t:"Write",tokens:35000,score:57.34,cl:.273,af:.6,ad:.9,dv:.5,exceeded:false},
+        {t:"Task",tokens:38000,score:63.34,cl:.273,af:.8,ad:.9,dv:.5,exceeded:false},
+        {t:"Bash",tokens:40000,score:67.81,cl:.312,af:.8,ad:1,dv:.55,exceeded:false},
+        {t:"Task",tokens:42000,score:73.81,cl:.312,af:1,ad:1,dv:.55,exceeded:true},
+        {t:"Bash",tokens:45000,score:75.79,cl:.352,af:1,ad:1,dv:.6,exceeded:true},
+    ],
+    "ff790525": [
+        {t:"Read",tokens:8000,score:5.06,cl:.062,af:0,ad:.1,dv:.05,exceeded:false},
+        {t:"Bash",tokens:9000,score:8.76,cl:.07,af:0,ad:.2,dv:.1,exceeded:false},
+        {t:"Task",tokens:12000,score:14.76,cl:.07,af:.2,ad:.2,dv:.1,exceeded:false},
+        {t:"Read",tokens:14000,score:19.23,cl:.109,af:.2,ad:.3,dv:.15,exceeded:false},
+        {t:"Task",tokens:18000,score:25.23,cl:.109,af:.4,ad:.3,dv:.15,exceeded:false},
+        {t:"Write",tokens:20000,score:29.91,cl:.156,af:.4,ad:.4,dv:.2,exceeded:false},
+        {t:"Task",tokens:25000,score:35.91,cl:.156,af:.6,ad:.4,dv:.2,exceeded:false},
+        {t:"Bash",tokens:28000,score:40.97,cl:.219,af:.6,ad:.5,dv:.25,exceeded:false},
+        {t:"Task",tokens:32000,score:46.97,cl:.219,af:.8,ad:.5,dv:.25,exceeded:false},
+        {t:"Bash",tokens:35000,score:51.84,cl:.273,af:.8,ad:.6,dv:.3,exceeded:false},
+        {t:"Bash",tokens:36000,score:55.53,cl:.281,af:.8,ad:.7,dv:.35,exceeded:false},
+        {t:"Read",tokens:37000,score:59.23,cl:.289,af:.8,ad:.8,dv:.4,exceeded:false},
+        {t:"Bash",tokens:38000,score:62.92,cl:.297,af:.8,ad:.9,dv:.45,exceeded:false},
+        {t:"Task",tokens:42000,score:68.92,cl:.297,af:1,ad:.9,dv:.45,exceeded:false},
+        {t:"Bash",tokens:45000,score:73.79,cl:.352,af:1,ad:1,dv:.5,exceeded:true},
+    ],
+    "dad77273": [
+        {t:"Read",tokens:5000,score:4.48,cl:.039,af:0,ad:.1,dv:.05,exceeded:false},
+        {t:"checkpoint",tokens:0,score:1.98,cl:.039,af:0,ad:0,dv:.05,exceeded:false},
+        {t:"Read",tokens:8000,score:6.06,cl:.062,af:0,ad:.1,dv:.1,exceeded:false},
+        {t:"Read",tokens:9000,score:9.76,cl:.07,af:0,ad:.2,dv:.15,exceeded:false},
+        {t:"Read",tokens:10000,score:13.45,cl:.078,af:0,ad:.3,dv:.2,exceeded:false},
+        {t:"Edit",tokens:12000,score:17.34,cl:.094,af:0,ad:.4,dv:.25,exceeded:false},
+        {t:"Edit",tokens:13000,score:21.04,cl:.102,af:0,ad:.5,dv:.3,exceeded:false},
+        {t:"Edit",tokens:19000,score:25.71,cl:.148,af:0,ad:.6,dv:.35,exceeded:false},
+        {t:"Edit",tokens:19000,score:29.21,cl:.148,af:0,ad:.7,dv:.4,exceeded:false},
+        {t:"Bash",tokens:19000,score:32.71,cl:.148,af:0,ad:.8,dv:.45,exceeded:false},
+        {t:"Write",tokens:20000,score:36.41,cl:.156,af:0,ad:.9,dv:.5,exceeded:false},
+        {t:"Edit",tokens:19000,score:39.71,cl:.148,af:0,ad:1,dv:.55,exceeded:false},
+        {t:"Bash",tokens:19000,score:40.71,cl:.148,af:0,ad:1,dv:.6,exceeded:false},
+        {t:"Read",tokens:19000,score:41.71,cl:.148,af:0,ad:1,dv:.65,exceeded:false},
+        {t:"Edit",tokens:19000,score:42.71,cl:.148,af:0,ad:1,dv:.7,exceeded:false},
+        {t:"Bash",tokens:20000,score:43.91,cl:.156,af:0,ad:1,dv:.75,exceeded:false},
+    ],
+    "df0e01fe": [
+        {t:"Read",tokens:6000,score:4.67,cl:.047,af:0,ad:.1,dv:.05,exceeded:false},
+        {t:"checkpoint",tokens:0,score:2.17,cl:.047,af:0,ad:0,dv:.05,exceeded:false},
+        {t:"Read",tokens:10000,score:6.45,cl:.078,af:0,ad:.1,dv:.1,exceeded:false},
+        {t:"Glob",tokens:11000,score:10.15,cl:.086,af:0,ad:.2,dv:.15,exceeded:false},
+        {t:"Grep",tokens:12000,score:13.84,cl:.094,af:0,ad:.3,dv:.2,exceeded:false},
+        {t:"Task",tokens:15000,score:19.84,cl:.094,af:.2,ad:.3,dv:.2,exceeded:false},
+        {t:"Read",tokens:18000,score:24.52,cl:.141,af:.2,ad:.4,dv:.25,exceeded:false},
+        {t:"Read",tokens:19000,score:28.21,cl:.148,af:.2,ad:.5,dv:.3,exceeded:false},
+        {t:"Task",tokens:22000,score:34.21,cl:.148,af:.4,ad:.5,dv:.3,exceeded:false},
+        {t:"Task",tokens:28000,score:40.21,cl:.148,af:.6,ad:.5,dv:.3,exceeded:false},
+        {t:"Edit",tokens:30000,score:45.86,cl:.234,af:.6,ad:.6,dv:.35,exceeded:false},
+        {t:"Edit",tokens:32000,score:49.75,cl:.25,af:.6,ad:.7,dv:.4,exceeded:false},
+        {t:"Write",tokens:34000,score:53.64,cl:.266,af:.6,ad:.8,dv:.45,exceeded:false},
+        {t:"Write",tokens:35000,score:57.34,cl:.273,af:.6,ad:.9,dv:.5,exceeded:false},
+        {t:"Bash",tokens:40000,score:61.81,cl:.312,af:.6,ad:1,dv:.55,exceeded:false},
+    ],
+    "fb00f3ea": [
+        {t:"Read",tokens:8000,score:5.06,cl:.062,af:0,ad:.1,dv:.05,exceeded:false},
+        {t:"Bash",tokens:9000,score:8.76,cl:.07,af:0,ad:.2,dv:.1,exceeded:false},
+        {t:"Task",tokens:12000,score:14.76,cl:.07,af:.2,ad:.2,dv:.1,exceeded:false},
+        {t:"Read",tokens:14000,score:19.23,cl:.109,af:.2,ad:.3,dv:.15,exceeded:false},
+        {t:"Task",tokens:18000,score:25.23,cl:.109,af:.4,ad:.3,dv:.15,exceeded:false},
+        {t:"Write",tokens:20000,score:29.91,cl:.156,af:.4,ad:.4,dv:.2,exceeded:false},
+        {t:"Task",tokens:25000,score:35.91,cl:.156,af:.6,ad:.4,dv:.2,exceeded:false},
+        {t:"Bash",tokens:28000,score:40.97,cl:.219,af:.6,ad:.5,dv:.25,exceeded:false},
+        {t:"Task",tokens:32000,score:46.97,cl:.219,af:.8,ad:.5,dv:.25,exceeded:false},
+        {t:"Bash",tokens:35000,score:51.84,cl:.273,af:.8,ad:.6,dv:.3,exceeded:false},
+        {t:"Task",tokens:40000,score:57.84,cl:.273,af:1,ad:.6,dv:.3,exceeded:false},
+    ],
+};
+
+// ── CHART PALETTE ──
+const PAL = {
+    navy: '#1B2A4A', slate: '#64748B', blue: '#2563EB', purple: '#7C3AED',
+    red: '#DC2626', amber: '#D97706', green: '#059669', cyan: '#0891B2',
+    indigo: '#4F46E5', rose: '#E11D48',
+};
+
+function riskLvl(s){ return s>=70?'hi':s>=30?'md':'lo'; }
+function riskLabel(s){ return s>=70?'High':s>=30?'Elevated':'Normal'; }
+function badge(s){ return `<span class="badge ${riskLvl(s)}">${s.toFixed(1)}</span>`; }
+function obadge(o){ return `<span class="obadge ${o}">${o==='completed'?'Completed':'In Progress'}</span>`; }
+
+// ── DASHBOARD ──
+const D = {
+    charts: {}, filtered: SESSIONS, sortCol:'peak', sortDir:'desc', dc1:null, dc2:null,
+
+    init() {
+        this.filter();
+        this.renderDaily();
+        this.renderTools();
+        this.renderFactors();
+        this.renderOutcomes();
+    },
+
+    filter() {
+        const risk = document.getElementById('f-risk').value;
+        const out = document.getElementById('f-out').value;
+        const interesting = document.getElementById('f-interesting').value;
+        let s = interesting === 'all' ? SESSIONS : SESSIONS.filter(x => x.peak > 3.5);
+        if (risk === 'high') s = s.filter(x => x.peak >= 70);
+        else if (risk === 'elevated') s = s.filter(x => x.peak >= 30 && x.peak < 70);
+        else if (risk === 'normal') s = s.filter(x => x.peak < 30);
+        if (out !== 'all') s = s.filter(x => x.outcome === out);
+        this.filtered = s;
+        this.renderKPIs();
+        this.renderHist();
+        this.renderTable();
+    },
+
+    renderKPIs() {
+        const s = this.filtered;
+        const hi = s.filter(x => x.peak >= 70).length;
+        const avg = s.length ? s.reduce((a,x) => a + x.peak, 0) / s.length : 0;
+        const br = s.length ? (hi / s.length * 100) : 0;
+        const maxPeak = s.length ? Math.max(...s.map(x => x.peak)) : 0;
+        const maxSess = s.length ? s.reduce((a,x) => x.peak > a.peak ? x : a, s[0]) : null;
+
+        document.getElementById('k-hi').textContent = hi;
+        const hiKpi = document.getElementById('kpi-highrisk');
+        hiKpi.className = `card hero-kpi clickable ${hi > 0 ? 'critical' : 'ok'}`;
+        document.getElementById('k-hi-s').textContent = hi > 0 ? `${hi} session${hi!==1?'s':''} breached threshold 70` : 'No sessions breached threshold';
+
+        document.getElementById('k-br').textContent = br.toFixed(1) + '%';
+        const brKpi = document.getElementById('kpi-breach');
+        brKpi.className = `card hero-kpi clickable ${br > 10 ? 'critical' : br > 0 ? 'warning' : 'ok'}`;
+        document.getElementById('k-br-s').textContent = `${hi} of ${s.length} filtered sessions`;
+
+        document.getElementById('k-total').textContent = s.length;
+        document.getElementById('k-total-s').textContent = `of 5,730 total in database`;
+        document.getElementById('k-avg').textContent = avg.toFixed(1);
+        document.getElementById('k-avg-s').textContent = avg >= 70 ? 'Above threshold' : avg >= 30 ? 'Elevated range' : 'Normal range';
+        document.getElementById('k-peak').textContent = maxPeak.toFixed(1);
+        document.getElementById('k-peak-s').textContent = maxSess ? `Session ${maxSess.id.slice(0,8)} (${maxSess.scenario})` : 'N/A';
+    },
+
+    renderDaily() {
+        const ctx = document.getElementById('c-daily').getContext('2d');
+        const labels = DAILY.map(d => {
+            const dt = new Date(d.day + 'T12:00:00');
+            return dt.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+        });
+        this.charts.daily = new Chart(ctx, {
+            type:'bar',
+            data:{
+                labels,
+                datasets:[
+                    {label:'Sessions', data:DAILY.map(d=>d.sessions), backgroundColor:'rgba(37,99,235,.55)', borderRadius:6, yAxisID:'y', order:2},
+                    {label:'Avg Peak Risk', data:DAILY.map(d=>d.avg), type:'line', borderColor:PAL.red, backgroundColor:'rgba(220,38,38,.08)', borderWidth:2.5, tension:.35, pointRadius:4, pointBackgroundColor:'#fff', pointBorderColor:PAL.red, pointBorderWidth:2, yAxisID:'y1', fill:true, order:1},
+                ]
+            },
+            options:{
+                responsive:true, maintainAspectRatio:false,
+                interaction:{mode:'index', intersect:false},
+                plugins:{legend:{position:'top', labels:{usePointStyle:true, color:PAL.slate, padding:16, font:{size:12}}}},
+                scales:{
+                    x:{grid:{display:false}, ticks:{color:PAL.slate, font:{size:11}}},
+                    y:{position:'left', beginAtZero:true, grid:{color:'rgba(0,0,0,.04)'}, ticks:{color:PAL.slate}},
+                    y1:{position:'right', beginAtZero:true, max:100, grid:{display:false}, ticks:{color:PAL.red, callback:v=>v+'%'}, title:{display:true, text:'Risk Score', color:PAL.slate, font:{size:11}}}
+                }
+            }
+        });
+    },
+
+    renderHist() {
+        if (this.charts.hist) this.charts.hist.destroy();
+        const bins = Array(10).fill(0);
+        this.filtered.forEach(s => { const i = Math.min(9, Math.floor(s.peak/10)); bins[i]++; });
+        const labels = bins.map((_,i) => `${i*10}-${i*10+9}`);
+        const colors = bins.map((_,i) => i >= 7 ? 'rgba(220,38,38,.75)' : i >= 3 ? 'rgba(217,119,6,.65)' : 'rgba(5,150,105,.6)');
+        this.charts.hist = new Chart(document.getElementById('c-hist').getContext('2d'), {
+            type:'bar', data:{labels, datasets:[{data:bins, backgroundColor:colors, borderRadius:6}]},
+            options:{
+                responsive:true, maintainAspectRatio:false, animation:false,
+                plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>`${c.parsed.y} sessions`}}},
+                scales:{
+                    x:{grid:{display:false}, ticks:{color:PAL.slate}},
+                    y:{beginAtZero:true, grid:{color:'rgba(0,0,0,.04)'}, ticks:{color:PAL.slate, stepSize:1}}
+                }
+            }
+        });
+    },
+
+    renderTools() {
+        const top8 = TOOL_USAGE.slice(0,8);
+        const barColors = top8.map(t => t.avg_risk >= 10 ? 'rgba(220,38,38,.65)' : t.avg_risk >= 5 ? 'rgba(217,119,6,.55)' : 'rgba(37,99,235,.5)');
+        this.charts.tools = new Chart(document.getElementById('c-tools').getContext('2d'), {
+            type:'bar', data:{
+                labels:top8.map(t=>t.tool),
+                datasets:[
+                    {label:'Call Count', data:top8.map(t=>t.count), backgroundColor:barColors, borderRadius:6, yAxisID:'y'},
+                    {label:'Avg Risk', data:top8.map(t=>t.avg_risk), type:'line', borderColor:PAL.amber, borderWidth:2, tension:.3, pointRadius:4, pointBackgroundColor:'#fff', pointBorderColor:PAL.amber, pointBorderWidth:2, yAxisID:'y1'},
+                ]
+            },
+            options:{
+                responsive:true, maintainAspectRatio:false,
+                interaction:{mode:'index', intersect:false},
+                plugins:{legend:{position:'top', labels:{usePointStyle:true, color:PAL.slate, padding:14}}},
+                scales:{
+                    x:{grid:{display:false}, ticks:{color:PAL.slate, font:{size:11}}},
+                    y:{position:'left', beginAtZero:true, grid:{color:'rgba(0,0,0,.04)'}, ticks:{color:PAL.slate}},
+                    y1:{position:'right', beginAtZero:true, grid:{display:false}, ticks:{color:PAL.amber}, title:{display:true, text:'Avg Risk', color:PAL.slate, font:{size:11}}}
+                }
+            }
+        });
+    },
+
+    renderFactors() {
+        this.charts.factors = new Chart(document.getElementById('c-factors').getContext('2d'), {
+            type:'radar', data:{
+                labels:['Context Length (25%)', 'Agent Fanout (30%)', 'Autonomy Depth (25%)', 'Decision Velocity (20%)'],
+                datasets:[
+                    {label:'Combined (75.8)', data:[.352,1.0,1.0,.6], borderColor:PAL.red, backgroundColor:'rgba(220,38,38,.1)', borderWidth:2, pointRadius:4, pointBackgroundColor:PAL.red},
+                    {label:'Fanout (73.8)', data:[.352,1.0,1.0,.5], borderColor:PAL.purple, backgroundColor:'rgba(124,58,237,.08)', borderWidth:2, pointRadius:4, pointBackgroundColor:PAL.purple},
+                    {label:'Velocity (43.9)', data:[.156,0,1.0,.75], borderColor:PAL.amber, backgroundColor:'rgba(217,119,6,.08)', borderWidth:2, pointRadius:4, pointBackgroundColor:PAL.amber},
+                ]
+            },
+            options:{
+                responsive:true, maintainAspectRatio:false,
+                plugins:{legend:{position:'bottom', labels:{usePointStyle:true, color:PAL.slate, padding:10, font:{size:11}}}},
+                scales:{
+                    r:{min:0, max:1, grid:{color:'rgba(0,0,0,.06)'}, angleLines:{color:'rgba(0,0,0,.06)'}, pointLabels:{color:PAL.slate, font:{size:10}}, ticks:{color:PAL.slate, backdropColor:'transparent', stepSize:.25}}
+                }
+            }
+        });
+    },
+
+    renderOutcomes() {
+        this.charts.outcomes = new Chart(document.getElementById('c-outcomes').getContext('2d'), {
+            type:'doughnut', data:{
+                labels:['Completed', 'In Progress'],
+                datasets:[{data:[22, 5708], backgroundColor:[PAL.green, PAL.blue], borderColor:'#fff', borderWidth:3}]
+            },
+            options:{
+                responsive:true, maintainAspectRatio:false, cutout:'62%',
+                plugins:{
+                    legend:{position:'bottom', labels:{usePointStyle:true, color:PAL.slate, padding:16}},
+                    tooltip:{callbacks:{label:c=>{const t=c.dataset.data.reduce((a,b)=>a+b,0); return `${c.label}: ${c.parsed.toLocaleString()} (${(c.parsed/t*100).toFixed(1)}%)`;}}}
+                }
+            }
+        });
+    },
+
+    renderTable() {
+        const sorted = [...this.filtered].sort((a,b) => {
+            let av=a[this.sortCol], bv=b[this.sortCol];
+            if(av==null)av=-1; if(bv==null)bv=-1;
+            if(typeof av==='string'){av=av.toLowerCase();bv=bv.toLowerCase();}
+            const c=av<bv?-1:av>bv?1:0;
+            return this.sortDir==='asc'?c:-c;
+        });
+        const ar = col => this.sortCol===col ? (this.sortDir==='asc'?' \u25B2':' \u25BC') : '';
+        const cols = [{f:'started',l:'Date'},{f:'id',l:'Session'},{f:'scenario',l:'Type'},{f:'peak',l:'Peak Risk'},{f:'tools',l:'Tools'},{f:'agents',l:'Agents'},{f:'outcome',l:'Outcome'}];
+        let h = '<table><thead><tr>';
+        cols.forEach(c => { h += `<th onclick="D.sort('${c.f}')">${c.l}${ar(c.f)}</th>`; });
+        h += '</tr></thead><tbody>';
+        sorted.forEach(s => {
+            const dt = new Date(s.started).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+            const click = SESSION_EVENTS[s.id] ? ` onclick="D.sessionModal('${s.id}')"` : '';
+            h += `<tr${click}>`;
+            h += `<td>${dt}</td>`;
+            h += `<td style="font-family:'SF Mono',monospace;font-size:12px;color:var(--slate)">${s.id.slice(0,8)}</td>`;
+            h += `<td>${s.scenario}</td>`;
+            h += `<td>${badge(s.peak)}</td>`;
+            h += `<td>${s.tools}</td>`;
+            h += `<td>${s.agents}</td>`;
+            h += `<td>${obadge(s.outcome)}</td>`;
+            h += '</tr>';
+        });
+        h += '</tbody></table>';
+        document.getElementById('tbl').innerHTML = h;
+    },
+
+    sort(f) {
+        if(this.sortCol===f) this.sortDir = this.sortDir==='asc' ? 'desc' : 'asc';
+        else { this.sortCol=f; this.sortDir = f==='peak' ? 'desc' : 'asc'; }
+        this.renderTable();
+    },
+
+    // ── MODAL system ──
+    openModal(title, sub, bodyHTML) {
+        document.getElementById('modal-title').textContent = title;
+        document.getElementById('modal-sub').innerHTML = sub;
+        document.getElementById('modal-body').innerHTML = bodyHTML;
+        document.getElementById('modal-overlay').classList.add('show');
+        document.body.style.overflow = 'hidden';
+    },
+
+    closeModal() {
+        document.getElementById('modal-overlay').classList.remove('show');
+        document.body.style.overflow = '';
+        if(this.dc1) { this.dc1.destroy(); this.dc1=null; }
+        if(this.dc2) { this.dc2.destroy(); this.dc2=null; }
+    },
+
+    // ── KPI drill-down ──
+    drillKPI(type) {
+        if (type === 'highrisk') {
+            const hi = this.filtered.filter(x => x.peak >= 70);
+            let rows = hi.map(s => `<div class="raw-row"><strong>${s.id.slice(0,8)}</strong> &mdash; Peak: ${s.peak} &mdash; ${s.scenario} &mdash; ${s.tools} tools, ${s.agents} agents &mdash; ${s.outcome}</div>`).join('');
+            if (!rows) rows = '<div class="raw-row" style="color:var(--green)">No high-risk sessions in current filter.</div>';
+            this.openModal('High-Risk Sessions', `Sessions with peak score &ge; 70 (breach threshold)`, `<div class="raw-panel">${rows}</div>`);
+        }
+        else if (type === 'factor') {
+            const rows = TOOL_USAGE.map(t => `<div class="raw-row"><strong>${t.tool}</strong> &mdash; ${t.count.toLocaleString()} calls &mdash; avg risk: ${t.avg_risk.toFixed(2)}</div>`).join('');
+            this.openModal('Risk Factor Breakdown', 'Agent Fanout (30% weight) is the top contributor. Task (agent spawn) has avg risk 13.16.', `<div class="raw-panel">${rows}</div>`);
+        }
+        else if (type === 'breach') {
+            const hi = this.filtered.filter(x => x.peak >= 70);
+            const rate = this.filtered.length ? (hi.length / this.filtered.length * 100).toFixed(2) : 0;
+            let detail = `<p style="margin-bottom:12px;color:var(--text-2)">Breach rate: <strong>${rate}%</strong> (${hi.length} of ${this.filtered.length} sessions)</p>`;
+            detail += '<div class="raw-panel">';
+            hi.forEach(s => { detail += `<div class="raw-row">${s.id.slice(0,8)} &mdash; ${s.peak.toFixed(1)} &mdash; ${s.scenario}</div>`; });
+            if (!hi.length) detail += '<div class="raw-row" style="color:var(--green)">No breaches detected.</div>';
+            detail += '</div>';
+            this.openModal('Breach Rate Detail', 'Threshold: 70. Sessions exceeding this trigger compliance alerts.', detail);
+        }
+        else if (type === 'sessions') {
+            let detail = '<div class="raw-panel">';
+            this.filtered.slice(0,30).forEach(s => {
+                detail += `<div class="raw-row">${s.id.slice(0,8)} | ${new Date(s.started).toLocaleString()} | peak ${s.peak.toFixed(1)} | ${s.scenario} | ${s.outcome}</div>`;
+            });
+            if (this.filtered.length > 30) detail += `<div class="raw-row" style="color:var(--slate)">... and ${this.filtered.length - 30} more</div>`;
+            detail += '</div>';
+            this.openModal('Session List', `${this.filtered.length} sessions matching current filters`, detail);
+        }
+        else if (type === 'risk') {
+            const avg = this.filtered.length ? this.filtered.reduce((a,x)=>a+x.peak,0)/this.filtered.length : 0;
+            const sorted = [...this.filtered].sort((a,b) => b.peak - a.peak);
+            let detail = `<p style="margin-bottom:12px;color:var(--text-2)">Average peak risk: <strong>${avg.toFixed(2)}</strong></p>`;
+            detail += '<div class="raw-panel">';
+            sorted.slice(0,20).forEach(s => {
+                detail += `<div class="raw-row">${s.id.slice(0,8)} &mdash; ${s.peak.toFixed(1)} &mdash; ${riskLabel(s.peak)}</div>`;
+            });
+            detail += '</div>';
+            this.openModal('Risk Score Distribution', 'Sessions sorted by peak risk score (descending)', detail);
+        }
+        else if (type === 'events') {
+            this.openModal('Event Breakdown', '5,629 total events across all sessions', `
+                <div class="raw-panel">
+                    <div class="raw-row"><strong>tool_call</strong> &mdash; 5,401 events &mdash; avg risk 3.81</div>
+                    <div class="raw-row"><strong>agent_spawn</strong> &mdash; 225 events &mdash; avg risk 13.16</div>
+                    <div class="raw-row"><strong>checkpoint</strong> &mdash; 3 events &mdash; avg risk 2.11</div>
+                </div>
+            `);
+        }
+    },
+
+    // ── Session drill-down with charts ──
+    sessionModal(id) {
+        const evts = SESSION_EVENTS[id];
+        if (!evts) return;
+        const s = SESSIONS.find(x => x.id === id);
+
+        let body = '<div class="modal-charts"><div class="modal-chart-wrap"><h4>Risk Score Timeline</h4><canvas id="mc-timeline" height="220"></canvas></div>';
+        body += '<div class="modal-chart-wrap"><h4>Factor Breakdown (Stacked)</h4><canvas id="mc-factors" height="220"></canvas></div></div>';
+        body += '<div class="raw-panel" style="margin-top:20px">';
+        evts.forEach((e,i) => {
+            const color = e.exceeded ? 'var(--red)' : e.score >= 49 ? 'var(--amber)' : 'var(--green)';
+            body += `<div class="raw-row"><span style="color:${color};font-weight:600">#${i+1}</span> ${e.t} &mdash; score: ${e.score} &mdash; tokens: ${e.tokens.toLocaleString()} &mdash; CL:${(e.cl*100).toFixed(1)}% AF:${(e.af*100).toFixed(0)}% AD:${(e.ad*100).toFixed(0)}% DV:${(e.dv*100).toFixed(0)}%${e.exceeded ? ' <span style="color:var(--red);font-weight:700">BREACH</span>' : ''}</div>`;
+        });
+        body += '</div>';
+
+        this.openModal(
+            `Session ${id.slice(0,8)}`,
+            `${s.scenario} scenario &mdash; Peak: <strong style="color:${s.peak>=70?'var(--red)':s.peak>=30?'var(--amber)':'var(--green)'}">${s.peak}</strong> &mdash; ${s.tools} tools, ${s.agents} agents &mdash; ${s.outcome}`,
+            body
+        );
+
+        // Render charts after DOM is ready
+        requestAnimationFrame(() => {
+            const labels = evts.map((e,i) => `#${i+1} ${e.t}`);
+
+            this.dc1 = new Chart(document.getElementById('mc-timeline').getContext('2d'), {
+                type:'line', data:{
+                    labels,
+                    datasets:[{
+                        label:'Risk Score', data:evts.map(e=>e.score),
+                        borderColor:PAL.purple, backgroundColor:'rgba(124,58,237,.08)',
+                        borderWidth:2.5, fill:true, tension:.3, pointRadius:5,
+                        pointBackgroundColor:evts.map(e => e.exceeded ? PAL.red : e.score>=49 ? PAL.amber : PAL.green),
+                        pointBorderColor:'#fff', pointBorderWidth:2,
+                    }]
+                },
+                options:{
+                    responsive:true, maintainAspectRatio:false, animation:false,
+                    plugins:{
+                        legend:{display:false},
+                        tooltip:{callbacks:{label:c=>{const e=evts[c.dataIndex]; return [`Score: ${e.score}`, `Tokens: ${e.tokens.toLocaleString()}`, `CL: ${(e.cl*100).toFixed(1)}% | AF: ${(e.af*100).toFixed(0)}%`, `AD: ${(e.ad*100).toFixed(0)}% | DV: ${(e.dv*100).toFixed(0)}%`];}}}
+                    },
+                    scales:{
+                        x:{grid:{display:false}, ticks:{color:PAL.slate, font:{size:9}, maxRotation:45}},
+                        y:{min:0, max:100, grid:{color:'rgba(0,0,0,.04)'}, ticks:{color:PAL.slate}}
+                    }
+                }
+            });
+
+            this.dc2 = new Chart(document.getElementById('mc-factors').getContext('2d'), {
+                type:'bar', data:{
+                    labels,
+                    datasets:[
+                        {label:'Context (25%)', data:evts.map(e=>e.cl*25), backgroundColor:'rgba(37,99,235,.65)', borderRadius:2},
+                        {label:'Fanout (30%)', data:evts.map(e=>e.af*30), backgroundColor:'rgba(220,38,38,.65)', borderRadius:2},
+                        {label:'Autonomy (25%)', data:evts.map(e=>e.ad*25), backgroundColor:'rgba(217,119,6,.65)', borderRadius:2},
+                        {label:'Velocity (20%)', data:evts.map(e=>e.dv*20), backgroundColor:'rgba(124,58,237,.65)', borderRadius:2},
+                    ]
+                },
+                options:{
+                    responsive:true, maintainAspectRatio:false, animation:false,
+                    plugins:{legend:{position:'top', labels:{usePointStyle:true, color:PAL.slate, padding:8, font:{size:10}}}},
+                    scales:{
+                        x:{stacked:true, grid:{display:false}, ticks:{color:PAL.slate, font:{size:9}, maxRotation:45}},
+                        y:{stacked:true, max:100, grid:{color:'rgba(0,0,0,.04)'}, ticks:{color:PAL.slate}}
+                    }
+                }
+            });
+        });
+    },
+
+    // ── NATURAL LANGUAGE QUERY ──
+    nlQuery() {
+        const input = document.getElementById('nlq-input').value.trim().toLowerCase();
+        if (!input) return;
+        const answer = document.getElementById('nlq-answer');
+        answer.classList.add('show');
+
+        const s = this.filtered;
+        let result = '';
+
+        // Pattern matching for common queries
+        if (input.match(/high.risk|breach|danger|critical/)) {
+            const hi = s.filter(x => x.peak >= 70);
+            if (hi.length) {
+                result = `<strong>${hi.length} high-risk session${hi.length>1?'s':''}:</strong> ` +
+                    hi.map(x => `${x.id.slice(0,8)} (peak ${x.peak}, ${x.scenario})`).join(', ') +
+                    `. These sessions breached the compliance threshold of 70.`;
+            } else {
+                result = `<strong>No high-risk sessions</strong> found in the current filter. All sessions are below the breach threshold of 70.`;
+            }
+        }
+        else if (input.match(/agent|spawn|fanout|task/)) {
+            const withAgents = s.filter(x => x.agents > 0).sort((a,b) => b.agents - a.agents);
+            result = `<strong>${withAgents.length} sessions</strong> have agent spawns. ` +
+                `Top: ` + withAgents.slice(0,5).map(x => `${x.id.slice(0,8)} (${x.agents} agents, peak ${x.peak})`).join(', ') +
+                `. Agent Fanout carries 30% weight in the risk formula and averages 13.16 risk per Task spawn.`;
+        }
+        else if (input.match(/tool|bash|read|edit|write/)) {
+            result = `<strong>Tool usage breakdown:</strong> ` +
+                TOOL_USAGE.slice(0,5).map(t => `${t.tool}: ${t.count.toLocaleString()} calls (avg risk ${t.avg_risk.toFixed(1)})`).join(' | ') +
+                `. Task (agent spawn) has the highest avg risk at 13.16.`;
+        }
+        else if (input.match(/today|feb.?18|latest|recent/)) {
+            const today = s.filter(x => x.started.includes('2026-02-18')).sort((a,b) => b.peak - a.peak);
+            result = `<strong>${today.length} sessions today</strong> (Feb 18). ` +
+                `Highest risk: ` + today.slice(0,3).map(x => `${x.id.slice(0,8)} (${x.peak})`).join(', ') +
+                `. Scenarios: ${[...new Set(today.map(x=>x.scenario))].join(', ')}.`;
+        }
+        else if (input.match(/scenario|combined|fanout|velocity/)) {
+            const scenarios = {};
+            s.forEach(x => { if (!scenarios[x.scenario]) scenarios[x.scenario] = []; scenarios[x.scenario].push(x); });
+            result = '<strong>By scenario:</strong> ' +
+                Object.entries(scenarios).map(([k,v]) => {
+                    const avg = v.reduce((a,x)=>a+x.peak,0)/v.length;
+                    return `${k}: ${v.length} sessions, avg peak ${avg.toFixed(1)}`;
+                }).join(' | ');
+        }
+        else if (input.match(/project|rtfi|claude/)) {
+            const projects = {};
+            s.forEach(x => { if (!projects[x.project]) projects[x.project] = []; projects[x.project].push(x); });
+            result = '<strong>By project:</strong> ' +
+                Object.entries(projects).map(([k,v]) => {
+                    const avg = v.reduce((a,x)=>a+x.peak,0)/v.length;
+                    return `${k}: ${v.length} sessions, avg peak ${avg.toFixed(1)}`;
+                }).join(' | ');
+        }
+        else if (input.match(/summar|overview|status|how.?are/)) {
+            const hi = s.filter(x => x.peak >= 70).length;
+            const avg = s.length ? s.reduce((a,x)=>a+x.peak,0)/s.length : 0;
+            result = `<strong>Summary:</strong> ${s.length} sessions in view. ` +
+                `${hi} breach${hi!==1?'es':''} (${s.length?(hi/s.length*100).toFixed(1):0}% rate). ` +
+                `Average peak risk: ${avg.toFixed(1)}. ` +
+                `Top risk factor: Agent Fanout (30% weight). ` +
+                (hi > 0 ? `Action needed: Review breached sessions.` : `System is operating within normal parameters.`);
+        }
+        else if (input.match(/worst|highest|most.risky|dangerous/)) {
+            const sorted = [...s].sort((a,b) => b.peak - a.peak);
+            result = '<strong>Highest-risk sessions:</strong> ' +
+                sorted.slice(0,5).map((x,i) => `${i+1}. ${x.id.slice(0,8)} (peak ${x.peak}, ${x.scenario})`).join(' | ');
+        }
+        else if (input.match(/compliant|safe|good|low.risk|normal/)) {
+            const safe = s.filter(x => x.peak < 30);
+            result = `<strong>${safe.length} compliant sessions</strong> (risk < 30) out of ${s.length} total. ` +
+                `That's ${s.length?(safe.length/s.length*100).toFixed(1):0}% compliance rate.`;
+        }
+        else {
+            result = `I can answer questions about: <strong>high-risk sessions</strong>, <strong>agent spawns</strong>, <strong>tool usage</strong>, <strong>scenarios</strong>, <strong>projects</strong>, <strong>today's activity</strong>, <strong>worst sessions</strong>, <strong>compliance status</strong>, or a general <strong>summary</strong>. Try rephrasing your question.`;
+        }
+
+        answer.innerHTML = result;
+    },
+};
+
+D.init();
+</script>
+</body>
+</html>

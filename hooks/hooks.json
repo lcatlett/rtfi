@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PLUGIN_ROOT/scripts/hook_handler.py pre_tool_use",
+            "command": "bash $CLAUDE_PLUGIN_ROOT/scripts/run_hook.sh pre_tool_use",
             "timeout": 5000
           }
         ]
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PLUGIN_ROOT/scripts/hook_handler.py post_tool_use",
+            "command": "bash $CLAUDE_PLUGIN_ROOT/scripts/run_hook.sh post_tool_use",
             "timeout": 5000
           }
         ]
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PLUGIN_ROOT/scripts/hook_handler.py stop",
+            "command": "bash $CLAUDE_PLUGIN_ROOT/scripts/run_hook.sh stop",
             "timeout": 5000
           }
         ]
@@ -43,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PLUGIN_ROOT/scripts/hook_handler.py session_start",
+            "command": "bash $CLAUDE_PLUGIN_ROOT/scripts/run_hook.sh session_start",
             "timeout": 5000
           }
         ]

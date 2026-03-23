@@ -339,49 +339,28 @@ class Database:
         )
 
         # Update existing row (preserves session_state unless explicitly provided)
+        cols = [
+            "started_at=?", "ended_at=?", "instruction_source=?", "instruction_hash=?",
+            "final_risk_score=?", "peak_risk_score=?", "total_tool_calls=?",
+            "total_agent_spawns=?", "outcome=?", "project_dir=?",
+        ]
+        params: list[Any] = [
+            session.started_at.isoformat(),
+            session.ended_at.isoformat() if session.ended_at else None,
+            session.instruction_source,
+            session.instruction_hash,
+            session.final_risk_score,
+            session.peak_risk_score,
+            session.total_tool_calls,
+            session.total_agent_spawns,
+            session.outcome.value,
+            getattr(session, "project_dir", None),
+        ]
         if session_state is not None:
-            conn.execute(
-                """UPDATE sessions SET
-                started_at=?, ended_at=?, instruction_source=?, instruction_hash=?,
-                final_risk_score=?, peak_risk_score=?, total_tool_calls=?,
-                total_agent_spawns=?, outcome=?, project_dir=?, session_state=?
-                WHERE id=?""",
-                (
-                    session.started_at.isoformat(),
-                    session.ended_at.isoformat() if session.ended_at else None,
-                    session.instruction_source,
-                    session.instruction_hash,
-                    session.final_risk_score,
-                    session.peak_risk_score,
-                    session.total_tool_calls,
-                    session.total_agent_spawns,
-                    session.outcome.value,
-                    getattr(session, "project_dir", None),
-                    state_json,
-                    session.id,
-                ),
-            )
-        else:
-            conn.execute(
-                """UPDATE sessions SET
-                started_at=?, ended_at=?, instruction_source=?, instruction_hash=?,
-                final_risk_score=?, peak_risk_score=?, total_tool_calls=?,
-                total_agent_spawns=?, outcome=?, project_dir=?
-                WHERE id=?""",
-                (
-                    session.started_at.isoformat(),
-                    session.ended_at.isoformat() if session.ended_at else None,
-                    session.instruction_source,
-                    session.instruction_hash,
-                    session.final_risk_score,
-                    session.peak_risk_score,
-                    session.total_tool_calls,
-                    session.total_agent_spawns,
-                    session.outcome.value,
-                    getattr(session, "project_dir", None),
-                    session.id,
-                ),
-            )
+            cols.append("session_state=?")
+            params.append(state_json)
+        params.append(session.id)
+        conn.execute(f"UPDATE sessions SET {', '.join(cols)} WHERE id=?", params)
         conn.commit()
 
     def save_session_state(self, session_id: str, state_dict: dict[str, Any]) -> None:

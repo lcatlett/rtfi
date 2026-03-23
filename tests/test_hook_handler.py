@@ -210,3 +210,28 @@ class TestHandlers:
             assert "RTFI_SESSION_ID=" in content
         finally:
             Path(env_file_path).unlink(missing_ok=True)
+
+    def test_verify_audit_log_all_rotated(self):
+        """AC-9: verify_audit_log with verify_all=True checks rotated files."""
+        import tempfile
+        from hook_handler import sign_audit_entry, verify_audit_log
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "audit.log"
+            # Write a signed entry to the main log
+            entry1 = sign_audit_entry("TEST|session=abc|{}")
+            log_path.write_text(entry1 + "\n")
+            # Write a signed entry to a rotated file
+            rotated = log_path.with_suffix(".log.1")
+            entry2 = sign_audit_entry("TEST2|session=def|{}")
+            rotated.write_text(entry2 + "\n")
+
+            # verify_all=False only checks main file
+            results_main = verify_audit_log(log_path=log_path, verify_all=False)
+            assert len(results_main) == 1
+            assert results_main[0]["valid"]
+
+            # verify_all=True checks both
+            results_all = verify_audit_log(log_path=log_path, verify_all=True)
+            assert len(results_all) == 2
+            assert all(r["valid"] for r in results_all)

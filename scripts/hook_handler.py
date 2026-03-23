@@ -100,18 +100,22 @@ def _get_audit_key() -> bytes:
     """Get or create a machine-specific audit signing key.
 
     Creates key file with 0o600 permissions atomically to prevent race condition.
+    Handles concurrent first-call race (FileExistsError from O_EXCL).
     """
     key_path = LOG_DIR / ".audit_key"
     if key_path.exists():
         return key_path.read_bytes()
     key = os.urandom(32)
-    # Atomic creation with restricted permissions (no race window)
-    fd = os.open(str(key_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        os.write(fd, key)
-    finally:
-        os.close(fd)
-    return key
+        fd = os.open(str(key_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, key)
+        finally:
+            os.close(fd)
+        return key
+    except FileExistsError:
+        # Another process created the key concurrently — read theirs
+        return key_path.read_bytes()
 
 
 def sign_audit_entry(entry: str) -> str:
@@ -320,7 +324,7 @@ def _resolve_session_id() -> str | None:
 
 def handle_session_start(hook_data: dict[str, Any]) -> dict[str, Any]:
     """Handle SessionStart - initialize new session."""
-    validate_hook_data(hook_data)
+    validate_hook_data(hook_data)  # validates input; return value not needed here
     session_id = str(uuid.uuid4())
     os.environ[SESSION_ID_ENV] = session_id
 
@@ -433,7 +437,7 @@ def handle_pre_tool_use(hook_data: dict[str, Any]) -> dict[str, Any]:
 def handle_post_tool_use(hook_data: dict[str, Any]) -> dict[str, Any]:
     """Handle PostToolUse - update context after tool execution."""
     validated = validate_hook_data(hook_data)
-    session_id = os.environ.get(SESSION_ID_ENV)
+    session_id = _resolve_session_id()
 
     if not session_id:
         return {"continue": True}
@@ -458,7 +462,7 @@ def handle_post_tool_use(hook_data: dict[str, Any]) -> dict[str, Any]:
 
 def handle_stop(hook_data: dict[str, Any]) -> dict[str, Any]:
     """Handle Stop - finalize session. Preserves session_state for post-session analytics (AC-2)."""
-    session_id = os.environ.get(SESSION_ID_ENV)
+    session_id = _resolve_session_id()
 
     if not session_id:
         return {"decision": "approve"}
@@ -516,6 +520,12 @@ def handle_stop(hook_data: dict[str, Any]) -> dict[str, Any]:
 
         if SESSION_ID_ENV in os.environ:
             del os.environ[SESSION_ID_ENV]
+
+        # Clean up current_session file to prevent stale fallback
+        try:
+            CURRENT_SESSION_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
 
         summary = (
             f"RTFI: Session complete. Peak risk: {session.peak_risk_score:.1f}, "

@@ -171,27 +171,23 @@ def api_live(db: Database) -> dict:
 
 def api_sessions(db: Database, params: dict) -> dict:
     """GET /api/sessions?limit=50&offset=0"""
-    limit = int(params.get("limit", ["50"])[0])
-    offset = int(params.get("offset", ["0"])[0])
+    try:
+        limit = int(params.get("limit", ["50"])[0])
+        offset = int(params.get("offset", ["0"])[0])
+    except (ValueError, TypeError):
+        limit, offset = 50, 0
 
-    # Clamp
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
 
-    # Get total count
-    conn = db._connect()
-    total = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-
-    # Get paginated sessions
-    conn.row_factory = __import__("sqlite3").Row
-    rows = conn.execute(
-        "SELECT * FROM sessions ORDER BY started_at DESC LIMIT ? OFFSET ?",
-        (limit, offset),
-    ).fetchall()
-    conn.row_factory = None
+    # Use public API — get_recent_sessions handles row_factory safely
+    all_sessions = db.get_recent_sessions(limit=limit + offset)
+    total = len(all_sessions)
+    # Manual offset since get_recent_sessions doesn't support it
+    page = all_sessions[offset:offset + limit]
 
     stale_hours = int(_settings.get("stale_session_hours", STALE_SESSION_HOURS))
-    sessions = [_session_to_dict(db._row_to_session(row), stale_hours) for row in rows]
+    sessions = [_session_to_dict(s, stale_hours) for s in page]
 
     return {"sessions": sessions, "total": total}
 
@@ -325,8 +321,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             self._route()
-        except Exception as exc:
-            self._json_response(500, {"error": str(exc)})
+        except Exception:
+            self._json_response(500, {"error": "Internal server error"})
 
     def _route(self):
         parsed = urlparse(self.path)
@@ -397,7 +393,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 def serve(port: int, open_browser: bool) -> None:
     _load_config()
     ThreadingTCPServer.allow_reuse_address = True
-    with ThreadingTCPServer(("", port), DashboardHandler) as server:
+    with ThreadingTCPServer(("127.0.0.1", port), DashboardHandler) as server:
         url = f"http://localhost:{port}"
         print(f"RTFI Dashboard v{__version__} -> {url}")
         print(f"  Threshold: {_threshold():.0f}  |  Mode: {_settings.get('action_mode', 'alert')}")

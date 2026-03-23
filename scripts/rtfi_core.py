@@ -764,6 +764,8 @@ class RiskEngine:
 
         elif event.event_type == EventType.CHECKPOINT:
             state.steps_since_confirm = 0
+            state.tool_calls_timestamps.append(event.timestamp)
+            state.session.total_tool_calls += 1
 
         elif event.event_type == EventType.RESPONSE:
             if event.context_tokens:

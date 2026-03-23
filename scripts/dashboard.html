@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RTFI Analytics Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
+          integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
+          crossorigin="anonymous"></script>
+  <style>
+/* ── DESIGN TOKENS ──────────────────────────────────────────────── */
+:root {
+    --bg: #F4F5F7; --card: #FFFFFF;
+    --navy: #1B2A4A; --navy-light: #2D4066;
+    --slate: #64748B; --slate-light: #94A3B8;
+    --text: #1E293B; --text-2: #475569; --text-3: #94A3B8;
+    --red: #DC2626; --red-bg: #FEF2F2; --red-border: #FECACA;
+    --amber: #D97706; --amber-bg: #FFFBEB; --amber-border: #FDE68A;
+    --green: #059669; --green-bg: #ECFDF5; --green-border: #A7F3D0;
+    --blue: #2563EB; --blue-bg: #EFF6FF; --blue-border: #BFDBFE;
+    --purple: #7C3AED; --purple-bg: #F5F3FF; --purple-border: #DDD6FE;
+    --gap: 16px; --r: 20px;
+    --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+    --shadow-lg: 0 4px 12px rgba(0,0,0,.08), 0 2px 4px rgba(0,0,0,.04);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+    min-height: 100vh; -webkit-font-smoothing: antialiased; line-height: 1.6;
+}
+
+/* ── HEADER ─────────────────────────────────────────────────────── */
+#hdr {
+    background: var(--navy); padding: 0.875rem 1.5rem;
+    display: flex; align-items: center; justify-content: space-between;
+}
+#hdr h1 { font-size: 1.1rem; font-weight: 700; color: #f1f5f9; letter-spacing: -.2px; }
+#hdr h1 .brand { color: #60a5fa; }
+#hdr .sub { font-size: 0.72em; color: #94a3b8; margin-top: 2px; }
+.hdr-right { display: flex; align-items: center; gap: 16px; }
+.time-filter { display: flex; gap: 4px; }
+.time-filter button {
+    background: var(--navy-light); border: none; color: #94a3b8;
+    padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;
+    cursor: pointer; transition: all .15s;
+}
+.time-filter button.active, .time-filter button:hover {
+    background: #60a5fa; color: #fff;
+}
+.live-dot {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 0.8em; font-weight: 600;
+}
+.live-dot.active { color: #22c55e; }
+.live-dot.inactive { color: var(--slate-light); }
+.live-dot::before { content: '\25CF'; font-size: 0.7em; }
+.live-dot.active::before { animation: blink 2s infinite; }
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+
+/* ── LAYOUT ─────────────────────────────────────────────────────── */
+.wrap { max-width: 1400px; margin: 0 auto; padding: 24px; }
+.grid {
+    display: grid; gap: var(--gap);
+    grid-template-columns: repeat(12, 1fr);
+}
+.span-3 { grid-column: span 3; }
+.span-4 { grid-column: span 4; }
+.span-6 { grid-column: span 6; }
+.span-8 { grid-column: span 8; }
+.span-12 { grid-column: span 12; }
+
+/* ── CARDS ──────────────────────────────────────────────────────── */
+.card {
+    background: var(--card); border-radius: var(--r); padding: 24px;
+    box-shadow: var(--shadow); transition: box-shadow .2s;
+}
+.card:hover { box-shadow: var(--shadow-lg); }
+.card-title {
+    font-size: 12px; font-weight: 600; color: var(--slate);
+    text-transform: uppercase; letter-spacing: .8px; margin-bottom: 14px;
+}
+
+/* ── HERO KPIs ──────────────────────────────────────────────────── */
+.kpi-icon {
+    width: 44px; height: 44px; border-radius: 12px; display: flex;
+    align-items: center; justify-content: center; font-size: 20px; margin-bottom: 14px;
+}
+.kpi-val { font-size: 32px; font-weight: 800; letter-spacing: -.5px; line-height: 1.1; }
+.kpi-label { font-size: 13px; font-weight: 600; color: var(--text-2); margin-top: 4px; }
+.kpi-sub { font-size: 12px; color: var(--slate-light); margin-top: 6px; }
+
+/* ── SECONDARY KPIs ─────────────────────────────────────────────── */
+.kpi-sm .kpi-icon { width: 36px; height: 36px; font-size: 16px; margin-bottom: 10px; }
+.kpi-sm .kpi-val { font-size: 24px; }
+.kpi-sm .kpi-label { font-size: 12px; }
+
+/* ── BADGES ─────────────────────────────────────────────────────── */
+.badge {
+    display: inline-flex; align-items: center;
+    padding: 3px 12px; border-radius: 20px; font-size: 12px; font-weight: 600;
+}
+.badge.hi { background: var(--red-bg); color: var(--red); border: 1px solid var(--red-border); }
+.badge.md { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber-border); }
+.badge.lo { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
+
+.obadge {
+    display: inline-block; padding: 3px 12px; border-radius: 20px;
+    font-size: 12px; font-weight: 500;
+}
+.obadge.completed { background: var(--green-bg); color: var(--green); }
+.obadge.in_progress { background: var(--blue-bg); color: var(--blue); }
+.obadge.abandoned { background: var(--amber-bg); color: var(--amber); }
+.obadge.checkpoint_triggered { background: var(--purple-bg); color: var(--purple); }
+.obadge.user_aborted { background: var(--red-bg); color: var(--red); }
+
+/* ── GAUGE ──────────────────────────────────────────────────────── */
+.gauge-wrap { text-align: center; margin-bottom: 1.25rem; }
+.gauge-status { font-size: 0.75em; color: var(--slate); margin-bottom: 0.75rem; }
+.gauge-ring {
+    width: 140px; height: 140px; border-radius: 50%; border-width: 6px; border-style: solid;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    margin: 0 auto 0.75rem; transition: border-color .5s, box-shadow .5s;
+}
+.gauge-val { font-size: 2.8rem; font-weight: 800; line-height: 1; }
+.gauge-label { font-size: 0.6rem; letter-spacing: 0.1em; font-weight: 700; margin-top: 3px; }
+.gauge-sid { font-size: 0.75em; color: var(--slate-light); font-family: 'SF Mono', monospace; }
+
+/* ── FACTOR BARS ────────────────────────────────────────────────── */
+.factor-bar { margin: 8px 0; }
+.factor-bar-hd {
+    display: flex; justify-content: space-between;
+    font-size: 0.75em; margin-bottom: 4px;
+}
+.factor-bar-hd .name { color: var(--text-2); }
+.factor-bar-track { background: #E2E8F0; border-radius: 4px; height: 6px; }
+.factor-bar-fill { height: 6px; border-radius: 4px; transition: width .5s; }
+
+/* ── TABLE ──────────────────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th {
+    text-align: left; padding: 10px 14px; border-bottom: 2px solid #E2E8F0;
+    color: var(--slate); font-weight: 600; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .6px; white-space: nowrap;
+    cursor: pointer; user-select: none;
+}
+thead th:hover { color: var(--navy); }
+thead th .sort-arrow { font-size: 10px; margin-left: 4px; opacity: 0.4; }
+thead th.sorted .sort-arrow { opacity: 1; }
+tbody td { padding: 10px 14px; border-bottom: 1px solid #F1F5F9; vertical-align: middle; }
+tbody tr { cursor: pointer; transition: background .15s; }
+tbody tr:hover { background: #F8FAFC; }
+
+/* ── MODAL ──────────────────────────────────────────────────────── */
+.modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.4);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000; opacity: 0; pointer-events: none; transition: opacity .2s;
+}
+.modal-overlay.open { opacity: 1; pointer-events: auto; }
+.modal {
+    background: var(--card); border-radius: var(--r); padding: 32px;
+    max-width: 900px; width: 95%; max-height: 85vh; overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,.2);
+}
+.modal-header {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    margin-bottom: 20px;
+}
+.modal-close {
+    background: none; border: none; font-size: 24px; color: var(--slate);
+    cursor: pointer; padding: 4px 8px; border-radius: 8px;
+}
+.modal-close:hover { background: var(--bg); color: var(--text); }
+.stat-chips {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; margin-bottom: 1.5rem;
+}
+.stat-chip {
+    background: var(--bg); border: 1px solid #E2E8F0; border-radius: 12px; padding: 12px 16px;
+}
+.stat-chip .chip-val { font-size: 1.1rem; font-weight: 700; color: var(--navy); }
+.stat-chip .chip-lbl {
+    font-size: 0.7em; color: var(--slate); text-transform: uppercase;
+    letter-spacing: .05em; margin-top: 2px;
+}
+
+/* ── EMPTY / FOOTER ─────────────────────────────────────────────── */
+.empty { color: var(--slate); text-align: center; padding: 2rem; }
+.ft { text-align: center; padding: 24px 0 12px; color: var(--slate-light); font-size: 12px; }
+.chart-wrap { position: relative; width: 100%; }
+
+/* ── RESPONSIVE ─────────────────────────────────────────────────── */
+@media (max-width: 1024px) {
+    .grid { grid-template-columns: repeat(6, 1fr); }
+    .span-3 { grid-column: span 3; }
+    .span-4 { grid-column: span 6; }
+    .span-6 { grid-column: span 6; }
+    .span-8 { grid-column: span 6; }
+    .span-12 { grid-column: span 6; }
+    .stat-chips { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+    .wrap { padding: 12px; }
+    .grid { grid-template-columns: 1fr; }
+    .span-3, .span-4, .span-6, .span-8, .span-12 { grid-column: span 1; }
+    .stat-chips { grid-template-columns: repeat(2, 1fr); }
+}
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<div id="hdr">
+  <div>
+    <h1><span class="brand">RTFI</span> Analytics</h1>
+    <div class="sub">Real-Time Instruction Compliance Risk Scoring</div>
+  </div>
+  <div class="hdr-right">
+    <div class="time-filter">
+      <button data-days="7">7d</button>
+      <button data-days="30" class="active">30d</button>
+      <button data-days="90">90d</button>
+      <button data-days="9999">All</button>
+    </div>
+    <div id="live-indicator" class="live-dot inactive">OFFLINE</div>
+  </div>
+</div>
+
+<div class="wrap">
+  <!-- HERO KPI ROW -->
+  <div class="grid" style="margin-bottom: var(--gap);">
+    <div class="card span-4" id="kpi-high-risk">
+      <div class="kpi-icon" style="background:var(--red-bg);color:var(--red);">&#9888;</div>
+      <div class="kpi-val" style="color:var(--red);" id="kpi-high-risk-val">--</div>
+      <div class="kpi-label">High-Risk Sessions</div>
+      <div class="kpi-sub" id="kpi-high-risk-sub">--% of total</div>
+    </div>
+    <div class="card span-4" id="kpi-avg-risk">
+      <div class="kpi-icon" id="kpi-avg-risk-icon" style="background:var(--green-bg);color:var(--green);">&#9679;</div>
+      <div class="kpi-val" id="kpi-avg-risk-val" style="color:var(--green);">--</div>
+      <div class="kpi-label">Average Risk Score</div>
+      <div class="kpi-sub">Across all sessions</div>
+    </div>
+    <div class="card span-4">
+      <div class="kpi-icon" style="background:var(--blue-bg);color:var(--blue);">&#128202;</div>
+      <div class="kpi-val" style="color:var(--navy);" id="kpi-total-val">--</div>
+      <div class="kpi-label">Total Sessions</div>
+      <div class="kpi-sub">All time</div>
+    </div>
+  </div>
+
+  <!-- SECONDARY KPI ROW -->
+  <div class="grid" style="margin-bottom: var(--gap);">
+    <div class="card span-3 kpi-sm">
+      <div class="kpi-icon" style="background:var(--purple-bg);color:var(--purple);">&#9881;</div>
+      <div class="kpi-val" style="color:var(--navy);" id="kpi-tools-val">--</div>
+      <div class="kpi-label">Total Tool Calls</div>
+    </div>
+    <div class="card span-3 kpi-sm">
+      <div class="kpi-icon" style="background:var(--amber-bg);color:var(--amber);">&#9733;</div>
+      <div class="kpi-val" style="color:var(--navy);" id="kpi-agents-val">--</div>
+      <div class="kpi-label">Total Agent Spawns</div>
+    </div>
+    <div class="card span-3 kpi-sm">
+      <div class="kpi-icon" style="background:var(--green-bg);color:var(--green);">&#9654;</div>
+      <div class="kpi-val" style="color:var(--navy);" id="kpi-active-val">--</div>
+      <div class="kpi-label">Active Sessions</div>
+    </div>
+    <div class="card span-3 kpi-sm">
+      <div class="kpi-icon" style="background:var(--red-bg);color:var(--red);">&#9632;</div>
+      <div class="kpi-val" style="color:var(--navy);" id="kpi-threshold-val">--</div>
+      <div class="kpi-label">Threshold</div>
+    </div>
+  </div>
+
+  <!-- MAIN GRID -->
+  <div class="grid">
+    <!-- Live Gauge (span-4) -->
+    <div class="card span-4" id="gauge-card">
+      <div class="card-title">Live Risk Monitor</div>
+      <div id="gauge-container">
+        <div class="empty">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Daily Volume & Risk Trend (span-8) -->
+    <div class="card span-8">
+      <div class="card-title">Daily Session Volume &amp; Risk Trend</div>
+      <div class="chart-wrap"><canvas id="chart-daily"></canvas></div>
+    </div>
+
+    <!-- Session Outcomes doughnut (span-4) -->
+    <div class="card span-4">
+      <div class="card-title">Session Outcomes</div>
+      <div class="chart-wrap" style="max-width:280px;margin:0 auto;"><canvas id="chart-outcomes"></canvas></div>
+    </div>
+
+    <!-- Risk Distribution (span-6) -->
+    <div class="card span-6">
+      <div class="card-title">Peak Risk Distribution</div>
+      <div class="chart-wrap"><canvas id="chart-distribution"></canvas></div>
+    </div>
+
+    <!-- Tool Usage vs Risk (span-6) -->
+    <div class="card span-6">
+      <div class="card-title">Tool Usage vs Risk Level</div>
+      <div class="chart-wrap"><canvas id="chart-tools"></canvas></div>
+    </div>
+
+    <!-- Risk Factor Radar (span-4) -->
+    <div class="card span-4">
+      <div class="card-title">Risk Factor Profile</div>
+      <div class="chart-wrap" style="max-width:300px;margin:0 auto;"><canvas id="chart-radar"></canvas></div>
+    </div>
+
+    <!-- Session Table (span-12) -->
+    <div class="card span-12" style="padding: 16px 24px;">
+      <div class="card-title">Session History</div>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th data-sort="id">ID <span class="sort-arrow">&#9650;</span></th>
+              <th data-sort="started_at" class="sorted">Started <span class="sort-arrow">&#9660;</span></th>
+              <th data-sort="peak_risk_score">Peak Risk <span class="sort-arrow">&#9650;</span></th>
+              <th data-sort="total_tool_calls" style="text-align:right">Tools <span class="sort-arrow">&#9650;</span></th>
+              <th data-sort="total_agent_spawns" style="text-align:right">Agents <span class="sort-arrow">&#9650;</span></th>
+              <th data-sort="outcome">Outcome <span class="sort-arrow">&#9650;</span></th>
+            </tr>
+          </thead>
+          <tbody id="sessions-body">
+            <tr><td colspan="6" class="empty">Loading sessions...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <footer class="ft">RTFI Analytics &mdash; AI Compliance Risk Monitoring</footer>
+</div>
+
+<!-- Session Detail Modal -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal" id="modal">
+    <div class="modal-header">
+      <div>
+        <div style="font-size:0.8em;color:var(--slate);font-family:'SF Mono',monospace;" id="modal-sid"></div>
+        <div style="font-size:0.75em;color:var(--slate);margin-top:4px;" id="modal-times"></div>
+      </div>
+      <button class="modal-close" id="modal-close">&times;</button>
+    </div>
+    <div class="stat-chips" id="modal-chips"></div>
+    <div style="display:flex;gap:var(--gap);margin-bottom:var(--gap);">
+      <div style="flex:1;"><canvas id="chart-modal-factors"></canvas></div>
+    </div>
+    <div class="card-title">Event Timeline</div>
+    <div style="overflow-x:auto;max-height:300px;overflow-y:auto;">
+      <table>
+        <thead>
+          <tr><th>Time</th><th>Type</th><th>Tool</th><th style="text-align:right">Score</th></tr>
+        </thead>
+        <tbody id="modal-events"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+'use strict';
+
+// ── State ────────────────────────────────────────────────────────
+let CFG = {};
+let currentDays = 30;
+let sessionsData = [];
+let sortField = 'started_at';
+let sortDir = 'desc';
+let pollTimer = null;
+let isLive = false;
+
+// Charts registry for cleanup
+const charts = {};
+
+// ── Color helpers ────────────────────────────────────────────────
+function riskColor(score) {
+    const t = CFG.threshold || 70;
+    if (score >= t) return '#DC2626';
+    if (score >= 30) return '#D97706';
+    return '#059669';
+}
+function riskLevel(score) {
+    const t = CFG.threshold || 70;
+    if (score >= t) return 'hi';
+    if (score >= 30) return 'md';
+    return 'lo';
+}
+function riskLabel(score) {
+    const t = CFG.threshold || 70;
+    if (score >= t) return 'HIGH RISK';
+    if (score >= 30) return 'ELEVATED';
+    return 'NORMAL';
+}
+
+// ── Fetch helper ─────────────────────────────────────────────────
+async function api(path) {
+    try {
+        const r = await fetch(path);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return await r.json();
+    } catch (e) {
+        console.error(`API error ${path}:`, e);
+        return null;
+    }
+}
+
+// ── Chart destroy/create helper ──────────────────────────────────
+function destroyChart(name) {
+    if (charts[name]) { charts[name].destroy(); delete charts[name]; }
+}
+
+// ── KPI rendering ────────────────────────────────────────────────
+function renderKPIs(stats) {
+    if (!stats) return;
+    const total = stats.total_sessions || 0;
+    const hi = stats.high_risk_sessions || 0;
+    const pct = total > 0 ? ((hi / total) * 100).toFixed(1) : '0.0';
+    const avg = stats.avg_risk_score || 0;
+
+    document.getElementById('kpi-high-risk-val').textContent = hi;
+    document.getElementById('kpi-high-risk-sub').textContent = pct + '% of total';
+    document.getElementById('kpi-avg-risk-val').textContent = avg.toFixed(1);
+
+    const avgColor = riskColor(avg);
+    document.getElementById('kpi-avg-risk-val').style.color = avgColor;
+    const avgIcon = document.getElementById('kpi-avg-risk-icon');
+    if (avg >= (CFG.threshold || 70)) {
+        avgIcon.style.background = 'var(--red-bg)'; avgIcon.style.color = 'var(--red)';
+    } else if (avg >= 30) {
+        avgIcon.style.background = 'var(--amber-bg)'; avgIcon.style.color = 'var(--amber)';
+    } else {
+        avgIcon.style.background = 'var(--green-bg)'; avgIcon.style.color = 'var(--green)';
+    }
+
+    document.getElementById('kpi-total-val').textContent = total;
+    document.getElementById('kpi-tools-val').textContent = stats.total_tool_calls || 0;
+    document.getElementById('kpi-agents-val').textContent = stats.total_agent_spawns || 0;
+    document.getElementById('kpi-threshold-val').textContent = (CFG.threshold || 70).toFixed(0);
+}
+
+// ── Live gauge rendering ─────────────────────────────────────────
+function renderGauge(data) {
+    const container = document.getElementById('gauge-container');
+    const indicator = document.getElementById('live-indicator');
+
+    if (!data || !data.score) {
+        container.innerHTML = '<div class="empty">No sessions yet</div>';
+        indicator.className = 'live-dot inactive';
+        indicator.textContent = 'OFFLINE';
+        isLive = false;
+        return;
+    }
+
+    isLive = data.is_live;
+    if (isLive) {
+        indicator.className = 'live-dot active';
+        indicator.textContent = 'LIVE';
+    } else {
+        indicator.className = 'live-dot inactive';
+        indicator.textContent = 'LAST SESSION';
+    }
+
+    const score = data.score;
+    const color = riskColor(score.total);
+    const label = riskLabel(score.total);
+    const sid = data.session ? data.session.id.substring(0, 12) + '\u2026' : '';
+    const statusDot = isLive
+        ? '<span style="color:var(--green)">\u25CF</span> LIVE'
+        : '<span style="color:var(--slate-light)">\u25C9</span> LAST SESSION';
+
+    const factors = [
+        { name: 'Context', val: score.context_length, weight: '\u00d70.25' },
+        { name: 'Fanout', val: score.agent_fanout, weight: '\u00d70.30' },
+        { name: 'Autonomy', val: score.autonomy_depth, weight: '\u00d70.25' },
+        { name: 'Velocity', val: score.decision_velocity, weight: '\u00d70.20' },
+    ];
+
+    let barsHtml = '';
+    factors.forEach(f => {
+        const pct = Math.round(f.val * 100);
+        const fc = riskColor(pct);
+        barsHtml += '<div class="factor-bar">' +
+            '<div class="factor-bar-hd">' +
+            '<span class="name">' + f.name + ' <span style="color:var(--slate-light)">' + f.weight + '</span></span>' +
+            '<span style="color:' + fc + ';font-weight:600">' + pct + '%</span>' +
+            '</div>' +
+            '<div class="factor-bar-track">' +
+            '<div class="factor-bar-fill" style="background:' + fc + ';width:' + pct + '%"></div>' +
+            '</div></div>';
+    });
+
+    container.innerHTML =
+        '<div class="gauge-wrap">' +
+        '<div class="gauge-status">' + statusDot + '</div>' +
+        '<div class="gauge-ring" style="border-color:' + color + ';box-shadow:0 0 24px ' + color + '33">' +
+        '<div class="gauge-val" style="color:' + color + '">' + Math.round(score.total) + '</div>' +
+        '<div class="gauge-label" style="color:' + color + '">' + label + '</div>' +
+        '</div>' +
+        '<div class="gauge-sid">' + sid + '</div>' +
+        '</div>' + barsHtml;
+
+    // Update radar chart with live factor data
+    renderRadar(score);
+
+    // Count active sessions for KPI
+    const activeCount = isLive ? 1 : 0;
+    document.getElementById('kpi-active-val').textContent = activeCount;
+}
+
+// ── Charts ───────────────────────────────────────────────────────
+
+function renderDailyChart(chartData) {
+    if (!chartData || !chartData.daily || chartData.daily.length === 0) return;
+    destroyChart('daily');
+    const ctx = document.getElementById('chart-daily').getContext('2d');
+    const daily = chartData.daily;
+    charts.daily = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: daily.map(d => d.day),
+            datasets: [
+                {
+                    type: 'bar', label: 'Sessions', data: daily.map(d => d.sessions),
+                    backgroundColor: '#BFDBFE', borderRadius: 6, yAxisID: 'y', order: 2,
+                },
+                {
+                    type: 'bar', label: 'High Risk', data: daily.map(d => d.high_risk),
+                    backgroundColor: '#FECACA', borderRadius: 6, yAxisID: 'y', order: 1,
+                },
+                {
+                    type: 'line', label: 'Avg Risk', data: daily.map(d => d.avg_risk),
+                    borderColor: '#D97706', backgroundColor: 'transparent',
+                    borderWidth: 2, pointRadius: 3, tension: 0.3, yAxisID: 'y1', order: 0,
+                },
+            ],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: true,
+            plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 16 } } },
+            scales: {
+                x: { grid: { display: false } },
+                y: { position: 'left', beginAtZero: true, title: { display: true, text: 'Sessions' } },
+                y1: { position: 'right', beginAtZero: true, max: 100, title: { display: true, text: 'Risk Score' }, grid: { drawOnChartArea: false } },
+            },
+        },
+    });
+}
+
+function renderOutcomesChart(sessions) {
+    if (!sessions || sessions.length === 0) return;
+    destroyChart('outcomes');
+    const counts = {};
+    sessions.forEach(s => { counts[s.outcome] = (counts[s.outcome] || 0) + 1; });
+    const outcomeColors = {
+        completed: '#059669', in_progress: '#2563EB', abandoned: '#D97706',
+        checkpoint_triggered: '#7C3AED', user_aborted: '#DC2626',
+    };
+    const labels = Object.keys(counts);
+    const data = Object.values(counts);
+    const colors = labels.map(l => outcomeColors[l] || '#94A3B8');
+
+    const ctx = document.getElementById('chart-outcomes').getContext('2d');
+    charts.outcomes = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: labels.map(l => l.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())),
+            datasets: [{ data, backgroundColor: colors, borderWidth: 0 }],
+        },
+        options: {
+            responsive: true, cutout: '62%',
+            plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12, font: { size: 11 } } } },
+        },
+    });
+}
+
+function renderDistributionChart(distribution) {
+    if (!distribution) return;
+    destroyChart('distribution');
+    const threshold = CFG.threshold || 70;
+    const labels = ['0-9','10-19','20-29','30-39','40-49','50-59','60-69','70-79','80-89','90-100'];
+    const colors = distribution.map((_, i) => {
+        const midpoint = i * 10 + 5;
+        if (midpoint >= threshold) return '#FECACA';
+        if (midpoint >= 30) return '#FDE68A';
+        return '#A7F3D0';
+    });
+    const borderColors = distribution.map((_, i) => {
+        const midpoint = i * 10 + 5;
+        if (midpoint >= threshold) return '#DC2626';
+        if (midpoint >= 30) return '#D97706';
+        return '#059669';
+    });
+    const ctx = document.getElementById('chart-distribution').getContext('2d');
+    charts.distribution = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [{
+                label: 'Sessions', data: distribution,
+                backgroundColor: colors, borderColor: borderColors, borderWidth: 1, borderRadius: 4,
+            }],
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { grid: { display: false }, title: { display: true, text: 'Risk Score Range' } },
+                y: { beginAtZero: true, title: { display: true, text: 'Sessions' } },
+            },
+        },
+    });
+}
+
+function renderToolChart(toolUsage) {
+    if (!toolUsage || toolUsage.length === 0) return;
+    destroyChart('tools');
+    const top8 = toolUsage.slice(0, 8);
+    const ctx = document.getElementById('chart-tools').getContext('2d');
+    charts.tools = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: top8.map(t => t.tool.length > 18 ? t.tool.substring(0, 18) + '...' : t.tool),
+            datasets: [
+                {
+                    type: 'bar', label: 'Count', data: top8.map(t => t.count),
+                    backgroundColor: '#BFDBFE', borderRadius: 4, yAxisID: 'y', order: 2,
+                },
+                {
+                    type: 'line', label: 'Avg Risk', data: top8.map(t => t.avg_risk),
+                    borderColor: '#DC2626', backgroundColor: 'transparent',
+                    borderWidth: 2, pointRadius: 4, tension: 0.3, yAxisID: 'y1', order: 1,
+                },
+            ],
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 16 } } },
+            scales: {
+                x: { grid: { display: false } },
+                y: { position: 'left', beginAtZero: true, title: { display: true, text: 'Call Count' } },
+                y1: { position: 'right', beginAtZero: true, max: 100, title: { display: true, text: 'Avg Risk' }, grid: { drawOnChartArea: false } },
+            },
+        },
+    });
+}
+
+function renderRadar(score) {
+    if (!score) return;
+    destroyChart('radar');
+    const ctx = document.getElementById('chart-radar').getContext('2d');
+    charts.radar = new Chart(ctx, {
+        type: 'radar',
+        data: {
+            labels: ['Context (\u00d70.25)', 'Fanout (\u00d70.30)', 'Autonomy (\u00d70.25)', 'Velocity (\u00d70.20)'],
+            datasets: [{
+                label: 'Risk Factors',
+                data: [score.context_length * 100, score.agent_fanout * 100, score.autonomy_depth * 100, score.decision_velocity * 100],
+                backgroundColor: 'rgba(37, 99, 235, 0.15)',
+                borderColor: '#2563EB', borderWidth: 2, pointBackgroundColor: '#2563EB', pointRadius: 4,
+            }],
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                r: {
+                    beginAtZero: true, max: 100,
+                    ticks: { stepSize: 25, font: { size: 10 } },
+                    pointLabels: { font: { size: 11 } },
+                },
+            },
+        },
+    });
+}
+
+// ── Sessions table ───────────────────────────────────────────────
+function renderSessions(sessions) {
+    sessionsData = sessions || [];
+    sortSessions();
+}
+
+function sortSessions() {
+    const sorted = [...sessionsData].sort((a, b) => {
+        let va = a[sortField], vb = b[sortField];
+        if (va == null) va = '';
+        if (vb == null) vb = '';
+        if (typeof va === 'string') { va = va.toLowerCase(); vb = (vb+'').toLowerCase(); }
+        if (va < vb) return sortDir === 'asc' ? -1 : 1;
+        if (va > vb) return sortDir === 'asc' ? 1 : -1;
+        return 0;
+    });
+
+    const tbody = document.getElementById('sessions-body');
+    if (sorted.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">No sessions recorded yet</td></tr>';
+        return;
+    }
+    const threshold = CFG.threshold || 70;
+    tbody.innerHTML = sorted.map(s => {
+        const sid = s.id.substring(0, 8) + '..';
+        const time = s.started_at ? new Date(s.started_at).toLocaleString(undefined, { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '--';
+        const lvl = riskLevel(s.peak_risk_score);
+        const score = s.peak_risk_score.toFixed(1);
+        const outcomeClass = s.outcome.replace(/ /g, '_');
+        const outcomeLabel = s.outcome.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        return '<tr data-sid="' + s.id + '">' +
+            '<td style="font-family:\'SF Mono\',monospace;font-size:0.85em">' + sid + '</td>' +
+            '<td style="color:var(--slate)">' + time + '</td>' +
+            '<td><span class="badge ' + lvl + '">' + score + '</span></td>' +
+            '<td style="text-align:right;color:var(--text-2)">' + s.total_tool_calls + '</td>' +
+            '<td style="text-align:right;color:var(--text-2)">' + s.total_agent_spawns + '</td>' +
+            '<td><span class="obadge ' + outcomeClass + '">' + outcomeLabel + '</span></td>' +
+            '</tr>';
+    }).join('');
+
+    // Click handlers
+    tbody.querySelectorAll('tr[data-sid]').forEach(row => {
+        row.addEventListener('click', () => openSessionModal(row.dataset.sid));
+    });
+}
+
+// Table sort
+document.querySelectorAll('thead th[data-sort]').forEach(th => {
+    th.addEventListener('click', () => {
+        const field = th.dataset.sort;
+        if (sortField === field) {
+            sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+            sortField = field;
+            sortDir = 'desc';
+        }
+        // Update sort arrows
+        document.querySelectorAll('thead th').forEach(h => {
+            h.classList.remove('sorted');
+            const arrow = h.querySelector('.sort-arrow');
+            if (arrow) arrow.innerHTML = '&#9650;';
+        });
+        th.classList.add('sorted');
+        const arrow = th.querySelector('.sort-arrow');
+        if (arrow) arrow.innerHTML = sortDir === 'asc' ? '&#9650;' : '&#9660;';
+        sortSessions();
+    });
+});
+
+// ── Session detail modal ─────────────────────────────────────────
+async function openSessionModal(sid) {
+    const data = await api('/api/session/' + sid);
+    if (!data || data.error) return;
+
+    const s = data.session;
+    const events = data.events || [];
+
+    document.getElementById('modal-sid').textContent = s.id;
+
+    const started = s.started_at ? new Date(s.started_at).toLocaleString() : '--';
+    const ended = s.ended_at ? new Date(s.ended_at).toLocaleString() : '--';
+    document.getElementById('modal-times').textContent = 'Started: ' + started + '  |  Ended: ' + ended;
+
+    // Stat chips
+    const lvl = riskLevel(s.peak_risk_score);
+    const outcomeClass = s.outcome.replace(/ /g, '_');
+    const outcomeLabel = s.outcome.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    document.getElementById('modal-chips').innerHTML =
+        '<div class="stat-chip"><div class="chip-val"><span class="badge ' + lvl + '">' + s.peak_risk_score.toFixed(1) + '</span></div><div class="chip-lbl">Peak Risk</div></div>' +
+        '<div class="stat-chip"><div class="chip-val">' + s.total_tool_calls + '</div><div class="chip-lbl">Tool Calls</div></div>' +
+        '<div class="stat-chip"><div class="chip-val">' + s.total_agent_spawns + '</div><div class="chip-lbl">Agent Spawns</div></div>' +
+        '<div class="stat-chip"><div class="chip-val"><span class="obadge ' + outcomeClass + '">' + outcomeLabel + '</span></div><div class="chip-lbl">Outcome</div></div>';
+
+    // Factor chart from last event with risk_score
+    destroyChart('modalFactors');
+    const lastScored = [...events].reverse().find(e => e.risk_score);
+    if (lastScored && lastScored.risk_score) {
+        const rs = lastScored.risk_score;
+        const ctx = document.getElementById('chart-modal-factors').getContext('2d');
+        charts.modalFactors = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['Context', 'Fanout', 'Autonomy', 'Velocity'],
+                datasets: [{
+                    label: 'Factor Value (%)',
+                    data: [rs.context_length * 100, rs.agent_fanout * 100, rs.autonomy_depth * 100, rs.decision_velocity * 100],
+                    backgroundColor: ['#BFDBFE', '#FDE68A', '#DDD6FE', '#A7F3D0'],
+                    borderRadius: 6,
+                }],
+            },
+            options: {
+                responsive: true, indexAxis: 'y',
+                plugins: { legend: { display: false } },
+                scales: { x: { beginAtZero: true, max: 100 } },
+            },
+        });
+    }
+
+    // Events table
+    const evBody = document.getElementById('modal-events');
+    if (events.length === 0) {
+        evBody.innerHTML = '<tr><td colspan="4" class="empty">No events recorded</td></tr>';
+    } else {
+        evBody.innerHTML = events.slice(-30).reverse().map(e => {
+            const time = new Date(e.timestamp).toLocaleTimeString();
+            const scoreHtml = e.risk_score
+                ? '<span style="color:' + riskColor(e.risk_score.total) + ';font-weight:600">' + e.risk_score.total.toFixed(1) + '</span>'
+                : '&mdash;';
+            return '<tr>' +
+                '<td style="font-family:\'SF Mono\',monospace;color:var(--slate)">' + time + '</td>' +
+                '<td style="color:var(--text-2)">' + e.event_type + '</td>' +
+                '<td style="font-family:\'SF Mono\',monospace">' + (e.tool_name || '\u2014') + '</td>' +
+                '<td style="text-align:right">' + scoreHtml + '</td></tr>';
+        }).join('');
+    }
+
+    document.getElementById('modal-overlay').classList.add('open');
+}
+
+// Modal close
+document.getElementById('modal-close').addEventListener('click', () => {
+    document.getElementById('modal-overlay').classList.remove('open');
+});
+document.getElementById('modal-overlay').addEventListener('click', (e) => {
+    if (e.target === document.getElementById('modal-overlay')) {
+        document.getElementById('modal-overlay').classList.remove('open');
+    }
+});
+
+// ── Time filter ──────────────────────────────────────────────────
+document.querySelectorAll('.time-filter button').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.time-filter button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentDays = parseInt(btn.dataset.days, 10);
+        loadChartData();
+    });
+});
+
+// ── Data loading ─────────────────────────────────────────────────
+async function loadAll() {
+    const [config, stats, sessionsResp, chartData, liveData] = await Promise.all([
+        api('/api/config'),
+        api('/api/stats'),
+        api('/api/sessions?limit=100'),
+        api('/api/chart-data?days=' + currentDays),
+        api('/api/live'),
+    ]);
+
+    if (config) CFG = config;
+    renderKPIs(stats);
+    renderGauge(liveData);
+    if (sessionsResp) {
+        renderSessions(sessionsResp.sessions);
+        renderOutcomesChart(sessionsResp.sessions);
+    }
+    if (chartData) {
+        renderDailyChart(chartData);
+        renderDistributionChart(chartData.risk_distribution);
+        renderToolChart(chartData.tool_usage);
+    }
+
+    startPolling();
+}
+
+async function loadChartData() {
+    const chartData = await api('/api/chart-data?days=' + currentDays);
+    if (chartData) {
+        renderDailyChart(chartData);
+        renderDistributionChart(chartData.risk_distribution);
+        renderToolChart(chartData.tool_usage);
+    }
+}
+
+// ── Polling ──────────────────────────────────────────────────────
+function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    poll();
+    pollTimer = setInterval(poll, isLive ? 2000 : 10000);
+}
+
+async function poll() {
+    const wasLive = isLive;
+    const liveData = await api('/api/live');
+    renderGauge(liveData);
+
+    // Adjust poll interval when live state changes
+    if (wasLive !== isLive) {
+        clearInterval(pollTimer);
+        pollTimer = setInterval(poll, isLive ? 2000 : 10000);
+    }
+
+    // Refresh stats and sessions at slower rate
+    const stats = await api('/api/stats');
+    renderKPIs(stats);
+}
+
+// ── Init ─────────────────────────────────────────────────────────
+loadAll();
+
+})();
+</script>
+</body>
+</html>

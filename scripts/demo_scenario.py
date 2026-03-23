@@ -27,9 +27,7 @@ from pathlib import Path
 script_dir = Path(__file__).parent
 sys.path.insert(0, str(script_dir))
 
-from rtfi.models.events import EventType, RiskEvent, RiskScore, Session, SessionOutcome
-from rtfi.scoring.engine import RiskEngine, SessionState
-from rtfi.storage.database import Database
+from rtfi_core import Database, EventType, RiskEngine, RiskEvent, RiskScore, Session, SessionOutcome, SessionState
 
 THRESHOLD = 70.0
 
@@ -98,7 +96,7 @@ def run_scenario(scenario: str, delay: float, db: Database, engine: RiskEngine) 
         score = engine.process_event(event)
         db.save_event(event)
         # Persist state so dashboard /frag/live reflects it immediately
-        state = engine._sessions.get(session_id)
+        state = engine.get_session_state(session_id)
         if state:
             db.save_session(state.session)
             db.save_session_state(session_id, state.to_dict())
@@ -117,7 +115,7 @@ def run_scenario(scenario: str, delay: float, db: Database, engine: RiskEngine) 
         )
         engine.process_event(event)
         db.save_event(event)
-        state = engine._sessions.get(session_id)
+        state = engine.get_session_state(session_id)
         if state:
             db.save_session(state.session)
             db.save_session_state(session_id, state.to_dict())
@@ -187,7 +185,7 @@ def run_scenario(scenario: str, delay: float, db: Database, engine: RiskEngine) 
             )
             score = engine.process_event(event)
             db.save_event(event)
-            state = engine._sessions.get(session_id)
+            state = engine.get_session_state(session_id)
             if state:
                 db.save_session(state.session)
                 db.save_session_state(session_id, state.to_dict())

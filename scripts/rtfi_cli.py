@@ -16,7 +16,7 @@ except ImportError:
     print("Error: Missing dependency 'pydantic'. Run: uv pip install pydantic>=2.0.0 (or pip3 install pydantic>=2.0.0)")
     sys.exit(1)
 
-from rtfi.storage.database import Database
+from rtfi_core import Database, load_settings, risk_level
 
 
 def cmd_sessions(args):
@@ -32,10 +32,11 @@ def cmd_sessions(args):
     print("-" * 70)
 
     for s in sessions:
+        level = risk_level(s.peak_risk_score)
         risk_indicator = ""
-        if s.peak_risk_score >= 70:
+        if level == "HIGH RISK":
             risk_indicator = " (!)"
-        elif s.peak_risk_score >= 50:
+        elif level == "ELEVATED":
             risk_indicator = " (*)"
 
         print(
@@ -117,17 +118,59 @@ def cmd_show(args):
             print(f"\n... and {len(events) - 50} more events")
 
 
-def cmd_status(args):
+def cmd_checkpoint(args: argparse.Namespace) -> None:
+    """Reset autonomy depth for current session (manual checkpoint)."""
+    import json
+    import os
+    from pathlib import Path
+
+    session_id = os.environ.get("RTFI_SESSION_ID", "")
+    if not session_id:
+        session_file = Path.home() / ".rtfi" / "current_session"
+        if session_file.exists():
+            session_id = session_file.read_text().strip()
+
+    if not session_id:
+        print("No active session found. Set RTFI_SESSION_ID or start a session first.")
+        return
+
+    db = Database()
+    state_dict = db.load_session_state(session_id)
+    if not state_dict:
+        print(f"No state found for session {session_id[:8]}...")
+        return
+
+    state_dict["steps_since_confirm"] = 0
+    db.save_session_state(session_id, state_dict)
+
+    from rtfi_core import EventType, RiskEvent
+    from datetime import datetime, timezone
+
+    event = RiskEvent(
+        session_id=session_id,
+        event_type=EventType.CHECKPOINT,
+        tool_name="manual_checkpoint",
+        metadata={"source": "cli"},
+    )
+    db.save_event(event)
+    print(f"Checkpoint: autonomy depth reset for session {session_id[:8]}...")
+
+
+def cmd_status(args: argparse.Namespace) -> None:
     """Show RTFI status."""
     db = Database()
-    stats = db.get_stats()
+    settings = load_settings()
+    stats = db.get_stats(threshold=settings["threshold"])
 
     print("\nRTFI Status")
     print("=" * 40)
     print(f"Database: {stats['database_path']}")
     print(f"Total Sessions: {stats['total_sessions']}")
-    print(f"High-Risk Sessions: {stats['high_risk_sessions']}")
+    print(f"High-Risk Sessions: {stats['high_risk_sessions']} (threshold: {settings['threshold']})")
     print(f"Total Events: {stats['total_events']}")
+    print(f"Total Tool Calls: {stats['total_tool_calls']}")
+    print(f"Total Agent Spawns: {stats['total_agent_spawns']}")
+    print(f"Avg Risk Score: {stats['avg_risk_score']}")
 
 
 def cmd_setup(args):
@@ -305,8 +348,11 @@ def main():
     # health command
     subparsers.add_parser("health", help="Run health check")
 
-    # setup command (L5)
+    # setup command
     subparsers.add_parser("setup", help="First-run setup and environment validation")
+
+    # checkpoint command
+    subparsers.add_parser("checkpoint", help="Reset autonomy depth for current session")
 
     args = parser.parse_args()
 
@@ -317,6 +363,7 @@ def main():
         "status": cmd_status,
         "health": cmd_health,
         "setup": cmd_setup,
+        "checkpoint": cmd_checkpoint,
     }
 
     commands[args.command](args)

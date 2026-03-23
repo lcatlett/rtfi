@@ -16,7 +16,11 @@ def dashboard_server():
     """Start a dashboard server on a random port for testing."""
     tmp_dir = tempfile.mkdtemp()
     db_path = str(Path(tmp_dir) / "test.db")
-    port = 17430  # Use non-standard port for testing
+    # Find a free port
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        port = s.getsockname()[1]
 
     # Pre-populate the DB with a session
     import sys

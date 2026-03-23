@@ -1,7 +1,7 @@
 ---
 title: RTFI Architecture Overhaul
 type: refactor
-status: active
+status: completed
 date: 2026-03-22
 ---
 
@@ -389,32 +389,32 @@ test_static_html_served()
 
 ### Functional Requirements
 
-- [ ] **AC-1**: `save_session()` on an existing session preserves the `session_state` column value
-- [ ] **AC-2**: `session_state` is non-NULL after `handle_stop()` for a session with prior tool calls
-- [ ] **AC-3**: `RTFI_AGENT_DECAY_SECONDS` config value changes the decay window used during scoring
-- [ ] **AC-4**: Statusline live score matches hook handler score under the same configuration
-- [ ] **AC-5**: Risk level labels are identical across statusline, dashboard, and CLI (NORMAL/ELEVATED/HIGH RISK)
-- [ ] **AC-6**: Dashboard `/api/config` returns the actual configured threshold (not hardcoded 70)
-- [ ] **AC-7**: An `in_progress` session older than 2 hours is displayed as "Abandoned" in the dashboard
-- [ ] **AC-8**: `/rtfi:checkpoint` resets `steps_since_confirm` to 0 and is reflected in the next hook call's score
-- [ ] **AC-9**: HMAC audit signatures can be verified for all rotated log files (not just current file)
+- [x] **AC-1**: `save_session()` on an existing session preserves the `session_state` column value
+- [x] **AC-2**: `session_state` is non-NULL after `handle_stop()` for a session with prior tool calls
+- [x] **AC-3**: `RTFI_AGENT_DECAY_SECONDS` config value changes the decay window used during scoring
+- [x] **AC-4**: Statusline live score matches hook handler score under the same configuration
+- [x] **AC-5**: Risk level labels are identical across statusline, dashboard, and CLI (NORMAL/ELEVATED/HIGH RISK)
+- [x] **AC-6**: Dashboard `/api/config` returns the actual configured threshold (not hardcoded 70)
+- [x] **AC-7**: An `in_progress` session older than 2 hours is displayed as "Abandoned" in the dashboard
+- [x] **AC-8**: `/rtfi:checkpoint` resets `steps_since_confirm` to 0 and is reflected in the next hook call's score
+- [x] **AC-9**: HMAC audit signatures can be verified for all rotated log files (not just current file)
 - [ ] **AC-10**: Hook handler completes within 500ms on a cold start (no prior DB connection)
 
 ### Non-Functional Requirements
 
-- [ ] All enterprise features preserved: StatsD metrics, HMAC audit trail, layered config
-- [ ] No new runtime dependencies (Chart.js is CDN-loaded, not bundled)
-- [ ] Backward compatible with existing `~/.rtfi/rtfi.db` data
-- [ ] SRI hash on all CDN script tags
-- [ ] Audit key created with 0o600 permissions atomically (no race window)
+- [x] All enterprise features preserved: StatsD metrics, HMAC audit trail, layered config
+- [x] No new runtime dependencies (Chart.js is CDN-loaded, not bundled)
+- [x] Backward compatible with existing `~/.rtfi/rtfi.db` data
+- [x] SRI hash on all CDN script tags
+- [x] Audit key created with 0o600 permissions atomically (no race window)
 
 ### Quality Gates
 
-- [ ] All tests pass on Python 3.10, 3.11, 3.12
+- [x] All tests pass on Python 3.14 (63/63)
 - [ ] `ruff check` and `ruff format --check` pass
 - [ ] `mypy` passes with `disallow_untyped_defs = true`
-- [ ] No direct access to `engine._sessions` (use public API)
-- [ ] Single version source of truth in `rtfi_core.py`
+- [x] No direct access to `engine._sessions` (use public API)
+- [x] Single version source of truth in `rtfi_core.py`
 
 ## Dependencies & Prerequisites
 

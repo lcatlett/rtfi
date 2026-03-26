@@ -80,13 +80,15 @@ Install the missing dependency:
    ```
 
 2. **Verify action mode:**
-   - Check `~/.claude/rtfi.local.md` or project `.claude/rtfi.local.md`
+   - Check `~/.rtfi/config.env` (primary config file)
+   - Or environment variables: `RTFI_THRESHOLD`, `RTFI_ACTION_MODE`
    - Ensure action mode is set to `alert`, `block`, or `confirm`
 
 3. **Check environment variables:**
    ```bash
    echo $RTFI_THRESHOLD
    echo $RTFI_ACTION_MODE
+   cat ~/.rtfi/config.env
    ```
 
 ### Commands Not Working

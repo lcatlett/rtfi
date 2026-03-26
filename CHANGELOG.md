@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-03-23
+
+### Added
+- `/rtfi:checkpoint` command for manual autonomy depth reset
+- Checkpoint auto-detection from configurable tool allowlist (`RTFI_CHECKPOINT_TOOLS`)
+- `find_active_session()` DB method for session ID fallback lookup
+- Dashboard JSON API with 7 endpoints (`/api/config`, `/api/live`, `/api/sessions`, `/api/session/{id}`, `/api/stats`, `/api/chart-data`)
+- Chart.js analytics dashboard with 5 charts: daily volume+risk trend, session outcomes, risk distribution, tool usage vs risk, risk factor radar
+- Live gauge with factor breakdown bars and configurable polling
+- `verify_audit_log(verify_all=True)` to verify rotated log files
+- `RTFI_AGENT_DECAY_SECONDS` configuration support
+- `RTFI_STALE_SESSION_HOURS` configuration for abandoned session detection
+- `get_session_state()` public API on `RiskEngine`
+
+### Changed
+- Consolidated 7+ Python modules into single `rtfi_core.py` domain module
+- Dashboard rebuilt from HTMX fragments to JSON API + Chart.js single-page app
+- `save_session()` uses INSERT OR IGNORE + UPDATE (preserves `session_state` on updates)
+- Session ID written to `~/.rtfi/current_session` as shell fallback
+- CLAUDE_ENV_FILE uses dotenv format (no `export` prefix)
+- `handle_stop()` preserves `session_state` for post-session analytics
+- Risk level taxonomy unified: NORMAL / ELEVATED / HIGH RISK across all components
+- Statusline shows live score (recalculated from `session_state`), not peak
+- `get_stats()` accepts configurable threshold parameter
+- Audit key creation uses atomic `O_CREAT | O_EXCL` with 0o600 permissions
+- SCHEMA constant includes `session_state` and `project_dir` columns directly
+- Version synced to 1.2.0 across `pyproject.toml`, `plugin.json`, `rtfi_core.py`
+
+### Fixed
+- `save_session()` no longer clears `session_state` column on updates (H1)
+- Session ID fragmentation across hook invocations (H2)
+- Checkpoint events never fired in production — autonomy depth only grew (H3)
+- Statusline showed peak score instead of live score (H4)
+- Hardcoded threshold (70) in dashboard and `get_stats()`
+- `AGENT_DECAY_SECONDS` config was dead code — now actually configurable
+- Audit key race condition (brief world-readable window between write and chmod)
+- `engine._sessions` accessed directly — replaced with public API
+
+### Removed
+- `scripts/rtfi/` subpackage (consolidated into `rtfi_core.py`)
+- Click CLI (`scripts/rtfi/cli/main.py`) — dead code, never invoked
+- `HANDOFF.md` — stale, described dashboard as "not yet built"
+- HTMX CDN dependency (replaced by Chart.js with SRI hash)
+
 ## [1.1.0] - 2026-02-18
 
 ### Added

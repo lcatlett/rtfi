@@ -32,9 +32,7 @@ from pathlib import Path
 script_dir = Path(__file__).parent
 sys.path.insert(0, str(script_dir))
 
-from rtfi.models.events import EventType, RiskEvent, RiskScore, SessionOutcome
-from rtfi.scoring.engine import RiskEngine, SessionState
-from rtfi.storage.database import Database
+from rtfi_core import Database, EventType, RiskEngine, RiskEvent, RiskScore, SessionOutcome, SessionState
 
 # ANSI
 _G = "\033[32m"

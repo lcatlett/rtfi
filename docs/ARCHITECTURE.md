@@ -1,7 +1,7 @@
 # RTFI Solution Architecture
 
 **Real-Time Instruction Compliance Risk Scoring for LLM Sessions**
-*v1.0.0 — February 2026*
+*v1.2.0 — March 2026*
 
 ---
 
@@ -45,21 +45,15 @@ C4Context
 C4Container
     title Container Diagram — RTFI Plugin
 
-    Container(hooks, "Hook Handler", "Python 3.10+", "Entry point for all Claude Code hooks. Validates input, hydrates state, dispatches to engine, returns JSON response.")
-    Container(engine, "Risk Scoring Engine", "Python", "Deterministic risk calculation. Manages session state, tracks agent decay, fires threshold callbacks.")
-    Container(models, "Domain Models", "Pydantic v2", "RiskScore, RiskEvent, Session, EventType enums. Immutable value objects.")
-    Container(storage, "Storage Layer", "SQLite", "Sessions table, risk_events table with indexes. State persistence via session_state JSON column.")
-    Container(cli, "CLI", "Python argparse", "Slash commands: sessions, risky, show, status, health, setup.")
-    Container(metrics, "Metrics Client", "Python socket/UDP", "Optional StatsD export. Fire-and-forget, never blocks hook execution.")
-    Container(audit, "Audit Logger", "Python logging + HMAC", "Structured JSON logs with HMAC-SHA256 tamper-evident signatures.")
+    Container(hooks, "Hook Handler", "Python 3.10+", "Entry point for all Claude Code hooks. Validates input, hydrates state, dispatches to engine, returns JSON response. Includes HMAC audit logging.")
+    Container(core, "RTFI Core", "Python", "Consolidated domain module: risk scoring engine, Pydantic models, SQLite database, session state management, configuration, and StatsD metrics.")
+    Container(cli, "CLI", "Python argparse", "Slash commands: sessions, risky, show, status, health, setup, checkpoint.")
+    Container(dashboard, "Dashboard", "Python + Chart.js", "JSON API server with single-page HTML dashboard. Live risk gauge, 5 analytics charts, session drill-down.")
 
-    Rel(hooks, engine, "process_event()")
-    Rel(hooks, storage, "save_event(), save_session()")
-    Rel(hooks, audit, "log_audit()")
-    Rel(hooks, metrics, "gauge/incr/timing")
-    Rel(engine, models, "RiskScore.calculate()")
-    Rel(cli, storage, "query sessions/events")
-    Rel(hooks, storage, "_hydrate_session() / _persist_state()")
+    Rel(hooks, core, "RiskEngine, Database, load_settings()")
+    Rel(hooks, core, "_hydrate_session() / _persist_state()")
+    Rel(cli, core, "Database queries, load_settings()")
+    Rel(dashboard, core, "Database queries, load_settings()")
 ```
 
 ---
@@ -68,25 +62,24 @@ C4Container
 
 ### Hook Handler (`scripts/hook_handler.py`)
 
-The main entry point. Each hook invocation is a **fresh Python process** — no in-memory state persists between calls. State is hydrated from SQLite on each invocation and written back after mutation.
+The main entry point. Each hook invocation is a **fresh Python process** — no in-memory state persists between calls. State is hydrated from SQLite on each invocation and written back after mutation. Also handles HMAC audit logging and structured JSON log output.
 
 ```mermaid
 sequenceDiagram
     participant CC as Claude Code
     participant HH as hook_handler.py
+    participant RC as rtfi_core.py
     participant DB as SQLite
-    participant SE as RiskEngine
-    participant SD as StatsD
 
     CC->>HH: stdin JSON + argv[1]=pre_tool_use
     HH->>HH: validate_hook_data()
-    HH->>DB: load session + session_state
-    HH->>SE: restore_session(session, state_dict)
-    HH->>SE: process_event(event)
-    SE->>SE: RiskScore.calculate()
-    SE-->>HH: RiskScore
-    HH->>DB: save_event() + save_session_state()
-    HH->>SD: gauge("risk_score"), incr("tool_calls")
+    HH->>RC: Database.load session + session_state
+    HH->>RC: RiskEngine.restore_session(session, state_dict)
+    HH->>RC: RiskEngine.process_event(event)
+    RC->>RC: RiskScore.calculate()
+    RC-->>HH: RiskScore
+    HH->>RC: Database.save_event() + save_session_state()
+    HH->>RC: get_statsd().gauge/incr (optional)
     HH->>HH: check threshold → approve/deny/confirm
     HH-->>CC: stdout JSON {"continue": bool, ...}
 ```
@@ -100,7 +93,7 @@ sequenceDiagram
 | `PostToolUse` | After tool completes | Update context token count |
 | `Stop` | Session ends | Finalize session, calculate final score, log summary |
 
-### Risk Scoring Engine (`scripts/rtfi/scoring/engine.py`)
+### Risk Scoring Engine (`scripts/rtfi_core.py::RiskEngine`)
 
 Deterministic, sub-10ms scoring based on [MOSAIC benchmark](https://arxiv.org/html/2601.18554) research:
 
@@ -119,7 +112,7 @@ All normalization ceilings are configurable (L6) via `~/.rtfi/config.env` or env
 
 **Agent Decay:** Agent spawns decay from the active count after `AGENT_DECAY_SECONDS` (300s / 5 minutes), preventing stale agent counts from inflating scores indefinitely.
 
-### Storage Layer (`scripts/rtfi/storage/database.py`)
+### Storage Layer (`scripts/rtfi_core.py::Database`)
 
 ```mermaid
 erDiagram
@@ -173,7 +166,7 @@ erDiagram
 
 **HMAC Audit Trail (M5):** Every audit entry is signed with HMAC-SHA256 using a machine-specific key (`~/.rtfi/.audit_key`). Signatures can be verified with `verify_audit_log()` to detect tampering.
 
-### Metrics (`scripts/rtfi/metrics.py`)
+### Metrics (`scripts/rtfi_core.py::get_statsd`)
 
 Optional StatsD-compatible UDP metrics. Enabled by setting `RTFI_STATSD_HOST`. Fire-and-forget — metric emission never blocks hook execution.
 
@@ -263,31 +256,39 @@ rtfi/
 │   └── marketplace.json     # Marketplace listing
 ├── hooks/
 │   └── hooks.json           # 4 hooks: SessionStart, PreToolUse, PostToolUse, Stop
-├── commands/                # 6 slash commands
+├── commands/                # 10 slash commands
 │   ├── sessions.md          #   /rtfi:sessions
 │   ├── risky.md             #   /rtfi:risky
 │   ├── show.md              #   /rtfi:show <id>
 │   ├── status.md            #   /rtfi:status
 │   ├── health.md            #   /rtfi:health
-│   └── setup.md             #   /rtfi:setup
+│   ├── setup.md             #   /rtfi:setup
+│   ├── dashboard.md         #   /rtfi:dashboard
+│   ├── demo.md              #   /rtfi:demo
+│   ├── check.md             #   /rtfi:check <id>
+│   └── checkpoint.md        #   /rtfi:checkpoint
 ├── agents/
 │   └── session-analyzer.md  # Subagent for analyzing high-risk sessions
 ├── skills/
 │   └── risk-scoring/
 │       └── SKILL.md         # Reference skill for score interpretation
-└── scripts/                 # Runtime code
-    ├── hook_handler.py      # Hook entry point (~610 lines)
-    ├── rtfi_cli.py          # CLI entry point (~327 lines)
-    ├── setup.sh             # Bash setup script
-    └── rtfi/                # Python package
-        ├── __init__.py      # v1.0.0
-        ├── metrics.py       # StatsD client
-        ├── models/
-        │   └── events.py    # Pydantic domain models
-        ├── scoring/
-        │   └── engine.py    # Risk scoring engine
-        └── storage/
-            └── database.py  # SQLite persistence
+├── scripts/                 # Runtime code
+│   ├── hook_handler.py      # Hook entry point + HMAC audit logging
+│   ├── rtfi_core.py         # Domain: models, scoring, database, config, metrics
+│   ├── rtfi_cli.py          # CLI entry point (argparse)
+│   ├── rtfi_dashboard.py    # JSON API server + static file serving
+│   ├── rtfi_statusline.py   # Statusline helper (live score, config-aware)
+│   ├── dashboard.html       # Single-page dashboard with Chart.js
+│   ├── setup.sh             # Bash setup script
+│   ├── run_hook.sh          # Bash shim for hook dispatch
+│   ├── demo_scenario.py     # Synthetic scenario driver for demos
+│   └── demo_compliance_check.py  # Per-constraint compliance auditor
+└── tests/
+    ├── conftest.py           # sys.path setup
+    ├── test_core.py          # Unit: models, database, engine, config
+    ├── test_hook_handler.py  # Unit: input validation, handler functions
+    ├── test_dashboard.py     # Unit: JSON API endpoints
+    └── test_integration.py   # Integration: subprocess hook invocations
 ```
 
 ---
@@ -304,6 +305,8 @@ rtfi/
 | **Agent decay (5 min)** | Prevents stale agent counts from inflating scores permanently (H4) |
 | **HMAC audit trail** | Tamper-evident audit log for enterprise compliance requirements (M5) |
 | **Layered config** | env vars > config file > legacy > defaults — supports both ops and developer workflows (M6) |
+| **Module consolidation** | Single `rtfi_core.py` for ~1,500 lines of domain logic — over-abstraction eliminated (ADR-0006) |
+| **Checkpoint detection** | Auto-detect `AskUserQuestion` + manual `/rtfi:checkpoint` to reset autonomy depth (ADR-0007) |
 | **Optional metrics** | StatsD only when explicitly enabled — zero overhead when not used (L3) |
 | **Configurable normalization** | Teams with different workflows can tune ceilings without forking (L6) |
 
@@ -317,7 +320,7 @@ rtfi/
 | **Reliability** | Never crash Claude Code | All exceptions caught, always return `{"continue": true}` |
 | **Privacy** | All data local | SQLite at `~/.rtfi/`, no cloud calls, no telemetry |
 | **Observability** | Structured JSON logs + optional metrics | M4 (JSON), L3 (StatsD), M5 (HMAC audit) |
-| **Testability** | 44 tests, 3-tier suite | Unit, integration (subprocess), scoring tests |
+| **Testability** | 63 tests, 3-tier suite | Unit (core, hook handler, dashboard), integration (subprocess) |
 | **Portability** | Python 3.10+, single dependency | Only `pydantic>=2.0.0`, stdlib SQLite |
 
 ---
@@ -326,13 +329,14 @@ rtfi/
 
 ```
 tests/
-├── test_hook_handler.py    # Unit: input validation, settings, handler functions
-├── test_scoring.py         # Unit: RiskScore.calculate(), RiskEngine lifecycle
-├── test_storage.py         # Unit: Database CRUD, queries, migrations
+├── conftest.py             # sys.path setup for test imports
+├── test_core.py            # Unit: RiskScore, Database, RiskEngine, SessionState, config
+├── test_hook_handler.py    # Unit: input validation, settings, handler functions, checkpoint detection
+├── test_dashboard.py       # Unit: JSON API endpoints, static file serving
 └── test_integration.py     # Integration: subprocess invocations matching production
 ```
 
-Integration tests invoke `hook_handler.py` as a subprocess with `RTFI_DB_PATH` pointed at a temp database, verifying the full stdin→process→stdout pipeline that Claude Code uses in production.
+`test_core.py` covers the consolidated `rtfi_core.py` module (models, database, engine, config). `test_dashboard.py` validates all 7 JSON API endpoints. Integration tests invoke `hook_handler.py` as a subprocess with `RTFI_DB_PATH` pointed at a temp database, verifying the full stdin→process→stdout pipeline that Claude Code uses in production.
 
 CI runs on Python 3.10, 3.11, 3.12 via GitHub Actions with ruff (lint + format), mypy (type check), and pytest.
 
@@ -390,7 +394,8 @@ RTFI would have paused before agents spawned: *"Confirm methodology is correct b
 | **2 — Stability** | Cleanup, permissions, log rotation, CI | Done (v0.2.1–0.2.2) |
 | **3 — Data & Scoring** | Agent decay, project isolation, query optimization | Done (v0.3.0) |
 | **4 — Enterprise Polish** | JSON logging, HMAC audit, config file, StatsD, setup wizard | Done (v1.0.0) |
-| **5 — Analytics** | Dashboard, session history, pattern detection | Planned |
+| **5 — Analytics** | Dashboard, session history, demo scenarios, compliance checks | Done (v1.1.0) |
+| **5.1 — Consolidation** | Module consolidation, 15 bug fixes, dashboard rebuild with Chart.js, checkpoint detection | Done (v1.2.0) |
 | **6 — Multi-platform** | Cursor, API proxy, Instruction Registry, enterprise features | Planned |
 
 ---

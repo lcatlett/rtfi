@@ -64,13 +64,14 @@ python3 scripts/rtfi_cli.py setup
 | `/rtfi:status` | RTFI status and statistics |
 | `/rtfi:health` | Run health check |
 | `/rtfi:setup` | First-run setup and validation |
+| `/rtfi:checkpoint` | Reset autonomy depth for the current session |
 | `/rtfi:dashboard` | Launch the web dashboard |
 | `/rtfi:demo` | Run a synthetic high-risk scenario against the live database |
 | `/rtfi:check` | Validate a session against declared constraints |
 
 ## Web Dashboard
 
-RTFI includes a live web dashboard for customer demos and monitoring. It requires no extra dependencies — Python stdlib only, with HTMX loaded from CDN.
+RTFI includes a live web dashboard for customer demos and monitoring. It requires no extra dependencies — Python stdlib only, with Chart.js loaded from CDN (SRI-verified).
 
 ```bash
 # Start the dashboard (opens browser automatically)
@@ -82,10 +83,11 @@ python3 scripts/rtfi_dashboard.py --port 7430 --no-browser
 
 Open **http://localhost:7430**. The dashboard shows:
 
-- **Live risk gauge** — glowing circle that updates every 2 seconds during an active Claude session, color-coded green / amber / red
-- **Factor bars** — real-time breakdown of context length, agent fanout, autonomy depth, and decision velocity
+- **Live risk gauge** — ring indicator that updates every 2 seconds during an active Claude session, color-coded green / amber / red
+- **Factor bars** — real-time breakdown of context length, agent fanout, autonomy depth, and decision velocity with weights
+- **5 analytics charts** — daily volume & risk trend, session outcomes, risk distribution, tool usage vs risk, risk factor radar
 - **Session history** — last 25 sessions, clickable rows with peak score badges
-- **Session detail** — full event timeline with per-event risk scores; navigates via HTMX without page reload
+- **Session detail** — full event timeline with per-event risk scores via modal drill-down
 
 Stop with `Ctrl+C`.
 

@@ -34,8 +34,9 @@ class TestCrossProcessStatePersistence:
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def _invoke_hook(self, hook_type: str, input_data: dict) -> dict:
+        hook_script = str(Path(__file__).parent.parent / "scripts" / "hook_handler.py")
         result = subprocess.run(
-            ["python3", "scripts/hook_handler.py", hook_type],
+            ["python3", hook_script, hook_type],
             input=json.dumps(input_data),
             capture_output=True,
             text=True,

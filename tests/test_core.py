@@ -17,6 +17,7 @@ from rtfi_core import (
     Session,
     SessionOutcome,
     SessionState,
+    estimate_tokens,
     load_settings,
     risk_level,
 )
@@ -46,9 +47,18 @@ class TestRiskScore:
 
     def test_calculate_all_max(self):
         score = RiskScore.calculate(
-            tokens=200000, active_agents=10, steps_since_confirm=20, tools_per_minute=40.0
+            tokens=200000, active_agents=10, steps_since_confirm=20, tools_per_minute=40.0,
+            skill_tokens_injected=5000, instruction_tokens=2500,
         )
         assert score.total == 100.0
+        assert score.threshold_exceeded
+
+    def test_calculate_all_max_without_displacement(self):
+        """Without displacement params, max is 90 (displacement weight=0.10 contributes 0)."""
+        score = RiskScore.calculate(
+            tokens=200000, active_agents=10, steps_since_confirm=20, tools_per_minute=40.0,
+        )
+        assert score.total == 90.0
         assert score.threshold_exceeded
 
     def test_threshold_boundary(self):
@@ -59,9 +69,10 @@ class TestRiskScore:
         )
         assert not score_below.threshold_exceeded
 
-        # At threshold
+        # At threshold — all 5 factors maxed
         score_at = RiskScore.calculate(
             tokens=128000, active_agents=5, steps_since_confirm=10, tools_per_minute=20.0,
+            skill_tokens_injected=5000, instruction_tokens=2500,
             threshold=100.0,
         )
         assert score_at.threshold_exceeded
@@ -70,6 +81,7 @@ class TestRiskScore:
         score = RiskScore.calculate(
             tokens=32000, active_agents=1, steps_since_confirm=2, tools_per_minute=5.0,
             max_tokens=32000, max_agents=1, max_steps=2, max_tools_per_min=5.0,
+            skill_tokens_injected=5000, instruction_tokens=2500,
         )
         assert score.total == 100.0
 
@@ -77,6 +89,64 @@ class TestRiskScore:
         score_agents = RiskScore.calculate(tokens=0, active_agents=10, steps_since_confirm=0, tools_per_minute=0.0)
         score_context = RiskScore.calculate(tokens=200000, active_agents=0, steps_since_confirm=0, tools_per_minute=0.0)
         assert score_agents.total > score_context.total
+
+    def test_displacement_zero_when_no_instruction_tokens(self):
+        score = RiskScore.calculate(
+            tokens=50000, active_agents=0, steps_since_confirm=0, tools_per_minute=0.0,
+            skill_tokens_injected=10000, instruction_tokens=0,
+        )
+        assert score.instruction_displacement == 0.0
+
+    def test_displacement_zero_when_no_skill_tokens(self):
+        score = RiskScore.calculate(
+            tokens=50000, active_agents=0, steps_since_confirm=0, tools_per_minute=0.0,
+            skill_tokens_injected=0, instruction_tokens=2500,
+        )
+        assert score.instruction_displacement == 0.0
+
+    def test_displacement_scales_with_skill_tokens(self):
+        score_low = RiskScore.calculate(
+            tokens=50000, active_agents=0, steps_since_confirm=0, tools_per_minute=0.0,
+            skill_tokens_injected=500, instruction_tokens=2500,
+        )
+        score_high = RiskScore.calculate(
+            tokens=50000, active_agents=0, steps_since_confirm=0, tools_per_minute=0.0,
+            skill_tokens_injected=2500, instruction_tokens=2500,
+        )
+        assert score_low.instruction_displacement == 0.2
+        assert score_high.instruction_displacement == 1.0
+        assert score_high.total > score_low.total
+
+    def test_displacement_caps_at_one(self):
+        score = RiskScore.calculate(
+            tokens=50000, active_agents=0, steps_since_confirm=0, tools_per_minute=0.0,
+            skill_tokens_injected=50000, instruction_tokens=2500,
+        )
+        assert score.instruction_displacement == 1.0
+
+    def test_displacement_weight_is_010(self):
+        """Displacement at 1.0 with all other factors at 0 should contribute exactly 10 points."""
+        score = RiskScore.calculate(
+            tokens=0, active_agents=0, steps_since_confirm=0, tools_per_minute=0.0,
+            skill_tokens_injected=5000, instruction_tokens=2500,
+        )
+        assert score.total == 10.0
+
+    def test_all_five_weights_sum_to_one(self):
+        """Weight distribution must sum to 1.0."""
+        score = RiskScore.calculate(
+            tokens=128000, active_agents=5, steps_since_confirm=10, tools_per_minute=20.0,
+            skill_tokens_injected=5000, instruction_tokens=2500,
+        )
+        assert score.total == 100.0
+
+    def test_backward_compat_default_displacement(self):
+        """Calling calculate() without displacement params should still work."""
+        score = RiskScore.calculate(
+            tokens=64000, active_agents=2, steps_since_confirm=5, tools_per_minute=10.0,
+        )
+        assert score.instruction_displacement == 0.0
+        assert score.total > 0
 
 
 # ── Database Tests ───────────────────────────────────────────────────────
@@ -256,6 +326,31 @@ class TestRiskEngine:
         assert len(restored.tool_calls_timestamps) == 1
         assert len(restored.agent_spawn_timestamps) == 1
 
+    def test_session_state_displacement_fields_roundtrip(self):
+        session = Session(id="test-disp-rt")
+        state = SessionState(
+            session=session, instruction_tokens=2500,
+            skill_tokens_injected=8000, last_context_tokens=50000,
+        )
+        d = state.to_dict()
+        assert d["instruction_tokens"] == 2500
+        assert d["skill_tokens_injected"] == 8000
+        assert d["last_context_tokens"] == 50000
+
+        restored = SessionState.from_dict(d, session)
+        assert restored.instruction_tokens == 2500
+        assert restored.skill_tokens_injected == 8000
+        assert restored.last_context_tokens == 50000
+
+    def test_session_state_displacement_defaults_backward_compat(self):
+        """Legacy state dicts without displacement fields should deserialize safely."""
+        session = Session(id="test-legacy")
+        legacy_dict = {"tokens": 3000, "steps_since_confirm": 2, "tool_timestamps": [], "agent_spawn_timestamps": []}
+        restored = SessionState.from_dict(legacy_dict, session)
+        assert restored.instruction_tokens == 0
+        assert restored.skill_tokens_injected == 0
+        assert restored.last_context_tokens == 0
+
     def test_active_agents_decay_window(self):
         """AC-3 (partial): Agents older than decay window don't count."""
         session = Session(id="test-decay")
@@ -369,6 +464,22 @@ class TestConfig:
 
 
 # ── Risk Level Tests ─────────────────────────────────────────────────────
+
+
+class TestEstimateTokens:
+    def test_basic_estimation(self):
+        assert estimate_tokens("a" * 400) == 100
+
+    def test_empty_string_returns_one(self):
+        assert estimate_tokens("") == 1
+
+    def test_short_string(self):
+        assert estimate_tokens("hi") == 1
+
+    def test_realistic_claude_md(self):
+        text = "x" * 10000  # ~10KB CLAUDE.md
+        tokens = estimate_tokens(text)
+        assert 2000 <= tokens <= 3000
 
 
 class TestRiskLevel:

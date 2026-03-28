@@ -225,7 +225,8 @@ def check_constraints(
                                 f"Factors: context={score.context_length:.2f}, "
                                 f"agents={score.agent_fanout:.2f}, "
                                 f"autonomy={score.autonomy_depth:.2f}, "
-                                f"velocity={score.decision_velocity:.2f}"
+                                f"velocity={score.decision_velocity:.2f}, "
+                                f"displacement={score.instruction_displacement:.2f}"
                             ),
                             severity="violation",
                         ))
@@ -296,10 +297,11 @@ def print_report(session, checks: list[ConstraintCheck], replay: list):
         )
         if last_score:
             factors = [
-                ("Context Length",  last_score.context_length,  0.25),
+                ("Context Length",  last_score.context_length,  0.20),
                 ("Agent Fanout",    last_score.agent_fanout,    0.30),
                 ("Autonomy Depth",  last_score.autonomy_depth,  0.25),
-                ("Decision Velocity", last_score.decision_velocity, 0.20),
+                ("Decision Velocity", last_score.decision_velocity, 0.15),
+                ("Displacement",    last_score.instruction_displacement, 0.10),
             ]
             for name, val, weight in factors:
                 contrib = val * weight * 100
@@ -318,7 +320,8 @@ def print_report(session, checks: list[ConstraintCheck], replay: list):
         first_score = threshold_events[0][0]
         print(f"\n  {_R}\"RTFI WARNING: Risk score {first_score.total:.1f} exceeds threshold {THRESHOLD}.")
         print(f"   Factors: context={first_score.context_length:.2f}, agents={first_score.agent_fanout:.2f},")
-        print(f"   autonomy={first_score.autonomy_depth:.2f}, velocity={first_score.decision_velocity:.2f}.")
+        print(f"   autonomy={first_score.autonomy_depth:.2f}, velocity={first_score.decision_velocity:.2f},")
+        print(f"   displacement={first_score.instruction_displacement:.2f}.")
         print(f"   High probability of instruction non-compliance.\"{_RESET}")
 
     print(f"\n{_BOLD}{'─' * 64}{_RESET}")

@@ -211,6 +211,83 @@ class TestHandlers:
         finally:
             Path(env_file_path).unlink(missing_ok=True)
 
+    def test_skill_tool_tracks_displacement_delta(self):
+        """Skill tool invocations should track token deltas for displacement."""
+        from hook_handler import engine
+
+        handle_session_start({})
+        session_id = os.environ.get("RTFI_SESSION_ID")
+
+        # Set instruction_tokens baseline
+        state = engine.get_session_state(session_id)
+        state.instruction_tokens = 2500
+
+        # Pre-Skill: record context_tokens
+        handle_pre_tool_use({"tool_name": "Skill", "context_tokens": 50000})
+        assert state.pre_skill_tokens == 50000
+
+        # Post-Skill: context grew by 15000 tokens (skill content loaded)
+        handle_post_tool_use({"tool_name": "Skill", "context_tokens": 65000})
+        assert state.pre_skill_tokens is None
+        assert state.skill_tokens_injected == 15000
+
+    def test_compaction_resets_skill_tokens(self):
+        """When context_tokens drops >50%, skill_tokens_injected resets."""
+        from hook_handler import engine
+
+        handle_session_start({})
+        session_id = os.environ.get("RTFI_SESSION_ID")
+
+        state = engine.get_session_state(session_id)
+        state.skill_tokens_injected = 20000
+        state.last_context_tokens = 180000
+
+        # Simulate compaction: tokens drop from 180K to 40K
+        handle_post_tool_use({"tool_name": "Read", "context_tokens": 40000})
+        assert state.skill_tokens_injected == 0
+
+    def test_session_start_measures_instruction_tokens(self):
+        """SessionStart should measure CLAUDE.md for displacement baseline."""
+        import tempfile
+
+        from hook_handler import engine
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a CLAUDE.md file
+            claude_md = Path(tmpdir) / "CLAUDE.md"
+            claude_md.write_text("x" * 10000)  # ~2500 tokens
+
+            with patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": tmpdir}):
+                handle_session_start({})
+                session_id = os.environ.get("RTFI_SESSION_ID")
+                state = engine.get_session_state(session_id)
+                # Should be CLAUDE.md tokens (~2500) + system_prompt_tokens (2000)
+                assert state.instruction_tokens > 2000
+
+    def test_instruction_tokens_env_override(self):
+        """RTFI_INSTRUCTION_TOKENS env var should override auto-detection."""
+        from hook_handler import engine
+
+        with patch.dict(os.environ, {"RTFI_INSTRUCTION_TOKENS": "5000"}):
+            handle_session_start({})
+            session_id = os.environ.get("RTFI_SESSION_ID")
+            state = engine.get_session_state(session_id)
+            assert state.instruction_tokens == 5000
+
+    def test_displacement_factor_appears_in_score(self):
+        """After Skill injection, displacement should appear in risk score."""
+        from hook_handler import engine
+
+        handle_session_start({})
+        session_id = os.environ.get("RTFI_SESSION_ID")
+
+        state = engine.get_session_state(session_id)
+        state.instruction_tokens = 2500
+        state.skill_tokens_injected = 2500
+
+        score = engine.get_current_score(session_id)
+        assert score.instruction_displacement == 1.0
+
     def test_verify_audit_log_all_rotated(self):
         """AC-9: verify_audit_log with verify_all=True checks rotated files."""
         import tempfile

@@ -38,6 +38,8 @@ __all__ = [
     "DEFAULT_SETTINGS",
     # Metrics
     "get_statsd",
+    # Utilities
+    "estimate_tokens",
     # Version
     "__version__",
 ]
@@ -142,6 +144,9 @@ class RiskScore(BaseModel):
     agent_fanout: float = Field(ge=0, le=1, description="Agent fanout factor")
     autonomy_depth: float = Field(ge=0, le=1, description="Autonomy depth factor")
     decision_velocity: float = Field(ge=0, le=1, description="Decision velocity factor")
+    instruction_displacement: float = Field(
+        default=0.0, ge=0, le=1, description="Instruction displacement factor"
+    )
     threshold_exceeded: bool = False
 
     @classmethod
@@ -156,20 +161,30 @@ class RiskScore(BaseModel):
         max_agents: int = 5,
         max_steps: int = 10,
         max_tools_per_min: float = 20.0,
+        skill_tokens_injected: int = 0,
+        instruction_tokens: int = 0,
     ) -> RiskScore:
         """Calculate risk score from session state."""
         weights = {
-            "context_length": 0.25,
+            "context_length": 0.20,
             "agent_fanout": 0.30,
             "autonomy_depth": 0.25,
-            "decision_velocity": 0.20,
+            "decision_velocity": 0.15,
+            "instruction_displacement": 0.10,
         }
+
+        displacement = (
+            min(1.0, skill_tokens_injected / instruction_tokens)
+            if instruction_tokens > 0
+            else 0.0
+        )
 
         factors = {
             "context_length": min(1.0, tokens / max_tokens) if max_tokens > 0 else 0.0,
             "agent_fanout": min(1.0, active_agents / max_agents) if max_agents > 0 else 0.0,
             "autonomy_depth": min(1.0, steps_since_confirm / max_steps) if max_steps > 0 else 0.0,
             "decision_velocity": min(1.0, tools_per_minute / max_tools_per_min) if max_tools_per_min > 0 else 0.0,
+            "instruction_displacement": displacement,
         }
 
         total = sum(factors[k] * weights[k] for k in weights) * 100
@@ -180,6 +195,7 @@ class RiskScore(BaseModel):
             agent_fanout=round(factors["agent_fanout"], 3),
             autonomy_depth=round(factors["autonomy_depth"], 3),
             decision_velocity=round(factors["decision_velocity"], 3),
+            instruction_displacement=round(factors["instruction_displacement"], 3),
             threshold_exceeded=total >= threshold,
         )
 
@@ -595,6 +611,11 @@ class Database:
 DEFAULT_AGENT_DECAY_SECONDS = 300  # 5 minutes
 
 
+def estimate_tokens(text: str) -> int:
+    """Estimate token count from text using ~4 chars/token heuristic."""
+    return max(1, len(text) // 4)
+
+
 @dataclass
 class SessionState:
     """Mutable state for a monitored session."""
@@ -605,6 +626,10 @@ class SessionState:
     tool_calls_timestamps: list[datetime] = field(default_factory=list)
     agent_spawn_timestamps: list[datetime] = field(default_factory=list)
     agent_decay_seconds: int = DEFAULT_AGENT_DECAY_SECONDS
+    instruction_tokens: int = 0
+    skill_tokens_injected: int = 0
+    pre_skill_tokens: int | None = None
+    last_context_tokens: int = 0
 
     @property
     def active_agents(self) -> int:
@@ -645,6 +670,9 @@ class SessionState:
             "steps_since_confirm": self.steps_since_confirm,
             "tool_timestamps": [t.isoformat() for t in self.tool_calls_timestamps],
             "agent_spawn_timestamps": [t.isoformat() for t in self.agent_spawn_timestamps],
+            "instruction_tokens": self.instruction_tokens,
+            "skill_tokens_injected": self.skill_tokens_injected,
+            "last_context_tokens": self.last_context_tokens,
         }
 
     @classmethod
@@ -689,6 +717,9 @@ class SessionState:
             tool_calls_timestamps=tool_timestamps,
             agent_spawn_timestamps=agent_timestamps,
             agent_decay_seconds=agent_decay_seconds,
+            instruction_tokens=data.get("instruction_tokens", 0),
+            skill_tokens_injected=data.get("skill_tokens_injected", 0),
+            last_context_tokens=data.get("last_context_tokens", 0),
         )
 
 
@@ -781,6 +812,8 @@ class RiskEngine:
             max_agents=self.max_agents,
             max_steps=self.max_steps,
             max_tools_per_min=self.max_tools_per_min,
+            skill_tokens_injected=state.skill_tokens_injected,
+            instruction_tokens=state.instruction_tokens,
         )
 
         if score.total > state.session.peak_risk_score:
@@ -808,6 +841,8 @@ class RiskEngine:
             max_agents=self.max_agents,
             max_steps=self.max_steps,
             max_tools_per_min=self.max_tools_per_min,
+            skill_tokens_injected=state.skill_tokens_injected,
+            instruction_tokens=state.instruction_tokens,
         )
 
 
@@ -825,6 +860,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "agent_decay_seconds": DEFAULT_AGENT_DECAY_SECONDS,
     "checkpoint_tools": "AskUserQuestion",
     "stale_session_hours": 2,
+    "instruction_tokens": 0,
+    "system_prompt_tokens": 2000,
+    "displacement_weight": 0.10,
 }
 
 _LOG_DIR = Path.home() / ".rtfi"
@@ -899,6 +937,9 @@ def load_settings(log_dir: Path | None = None) -> dict[str, Any]:
         ("max_tools_per_min", "RTFI_MAX_TOOLS_PER_MIN", float, 20.0, (1, 1000)),
         ("agent_decay_seconds", "RTFI_AGENT_DECAY_SECONDS", int, DEFAULT_AGENT_DECAY_SECONDS, (10, 3600)),
         ("stale_session_hours", "RTFI_STALE_SESSION_HOURS", int, 2, (1, 168)),
+        ("instruction_tokens", "RTFI_INSTRUCTION_TOKENS", int, 0, (0, 1_000_000)),
+        ("system_prompt_tokens", "RTFI_SYSTEM_PROMPT_TOKENS", int, 2000, (0, 100_000)),
+        ("displacement_weight", "RTFI_DISPLACEMENT_WEIGHT", float, 0.10, (0.0, 1.0)),
     ]
 
     for key, env_var, parser, default, bounds in _env_overrides:

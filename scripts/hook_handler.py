@@ -88,6 +88,7 @@ from rtfi_core import (
     Session,
     SessionOutcome,
     SessionState,
+    estimate_tokens,
     get_statsd,
     load_settings,
 )
@@ -322,6 +323,39 @@ def _resolve_session_id() -> str | None:
 # ── Hook Handlers ────────────────────────────────────────────────────────
 
 
+def _measure_instruction_tokens() -> int:
+    """Estimate CLAUDE.md token count for instruction displacement baseline.
+
+    Uses RTFI_INSTRUCTION_TOKENS env override if set, otherwise reads CLAUDE.md
+    from the project directory and estimates tokens.
+    """
+    override = os.environ.get("RTFI_INSTRUCTION_TOKENS")
+    if override:
+        try:
+            val = int(override)
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+
+    system_prompt_tokens = int(os.environ.get("RTFI_SYSTEM_PROMPT_TOKENS", "2000"))
+
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+    if not project_dir:
+        return system_prompt_tokens
+
+    claude_md = Path(project_dir) / "CLAUDE.md"
+    if not claude_md.exists():
+        return system_prompt_tokens
+
+    try:
+        content = claude_md.read_text()
+        return estimate_tokens(content) + system_prompt_tokens
+    except Exception as e:
+        logger.warning(f"Failed to read CLAUDE.md for displacement baseline: {e}")
+        return system_prompt_tokens
+
+
 def handle_session_start(hook_data: dict[str, Any]) -> dict[str, Any]:
     """Handle SessionStart - initialize new session."""
     validate_hook_data(hook_data)  # validates input; return value not needed here
@@ -330,6 +364,12 @@ def handle_session_start(hook_data: dict[str, Any]) -> dict[str, Any]:
 
     session = Session(id=session_id, project_dir=os.environ.get("CLAUDE_PROJECT_DIR"))
     engine.start_session(session)
+
+    # Set instruction token baseline for displacement tracking
+    state = engine.get_session_state(session_id)
+    if state:
+        state.instruction_tokens = _measure_instruction_tokens()
+
     db.save_session(session)
 
     # Purge old sessions based on retention policy
@@ -371,6 +411,12 @@ def handle_pre_tool_use(hook_data: dict[str, Any]) -> dict[str, Any]:
 
     tool_name = validated.get("tool_name", "unknown")
 
+    # Track Skill tool pre-tokens for displacement delta
+    if tool_name == "Skill":
+        state = engine.get_session_state(session_id)
+        if state:
+            state.pre_skill_tokens = validated.get("context_tokens", 0)
+
     # Classify event type
     if tool_name == "Task":
         event_type = EventType.AGENT_SPAWN
@@ -404,7 +450,8 @@ def handle_pre_tool_use(hook_data: dict[str, Any]) -> dict[str, Any]:
         warning = (
             f"RTFI WARNING: Risk score {score.total:.1f} exceeds threshold {settings['threshold']}. "
             f"Factors: context={score.context_length:.2f}, agents={score.agent_fanout:.2f}, "
-            f"autonomy={score.autonomy_depth:.2f}, velocity={score.decision_velocity:.2f}. "
+            f"autonomy={score.autonomy_depth:.2f}, velocity={score.decision_velocity:.2f}, "
+            f"displacement={score.instruction_displacement:.2f}. "
             f"High probability of instruction non-compliance."
         )
 
@@ -445,11 +492,34 @@ def handle_post_tool_use(hook_data: dict[str, Any]) -> dict[str, Any]:
     if not _hydrate_session(session_id):
         return {"continue": True}
 
+    context_tokens = validated.get("context_tokens", 0)
+    state = engine.get_session_state(session_id)
+
+    if state:
+        # Detect compaction: context_tokens dropped below 50% of last reading
+        if (
+            state.last_context_tokens > 0
+            and context_tokens < state.last_context_tokens * 0.5
+        ):
+            state.skill_tokens_injected = 0
+            logger.info(
+                f"Compaction detected: {state.last_context_tokens} -> {context_tokens}, "
+                f"resetting skill_tokens_injected"
+            )
+
+        # Complete Skill tool delta tracking
+        if state.pre_skill_tokens is not None:
+            delta = max(0, context_tokens - state.pre_skill_tokens)
+            state.skill_tokens_injected += delta
+            state.pre_skill_tokens = None
+
+        state.last_context_tokens = context_tokens
+
     event = RiskEvent(
         session_id=session_id,
         event_type=EventType.RESPONSE,
         tool_name=validated.get("tool_name"),
-        context_tokens=validated.get("context_tokens", 0),
+        context_tokens=context_tokens,
         metadata={"hook": "post_tool_use"},
     )
 
@@ -497,6 +567,8 @@ def handle_stop(hook_data: dict[str, Any]) -> dict[str, Any]:
                 max_agents=engine.max_agents,
                 max_steps=engine.max_steps,
                 max_tools_per_min=engine.max_tools_per_min,
+                skill_tokens_injected=temp_state.skill_tokens_injected,
+                instruction_tokens=temp_state.instruction_tokens,
             )
             session.final_risk_score = final_score.total
         else:

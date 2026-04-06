@@ -82,7 +82,6 @@ from rtfi_core import (
     load_settings,
 )
 
-
 # ── HMAC Audit Trail ────────────────────────────────────────────────────
 
 
@@ -115,7 +114,9 @@ def sign_audit_entry(entry: str) -> str:
     return f"{entry} [sig:{sig}]"
 
 
-def verify_audit_log(log_path: Path | None = None, verify_all: bool = False) -> list[dict[str, Any]]:
+def verify_audit_log(
+    log_path: Path | None = None, verify_all: bool = False
+) -> list[dict[str, Any]]:
     """Verify integrity of audit log entries.
 
     Args:
@@ -144,12 +145,16 @@ def verify_audit_log(log_path: Path | None = None, verify_all: bool = False) -> 
                 continue
             sig_marker = " [sig:"
             if sig_marker not in line:
-                results.append({"file": str(check_path), "line": i, "valid": False, "reason": "no signature"})
+                results.append(
+                    {"file": str(check_path), "line": i, "valid": False, "reason": "no signature"}
+                )
                 continue
             content, _, sig_part = line.rpartition(sig_marker)
             sig = sig_part.rstrip("]")
             expected = hmac.new(key, content.encode(), hashlib.sha256).hexdigest()
-            results.append({"file": str(check_path), "line": i, "valid": hmac.compare_digest(sig, expected)})
+            results.append(
+                {"file": str(check_path), "line": i, "valid": hmac.compare_digest(sig, expected)}
+            )
     return results
 
 
@@ -437,7 +442,8 @@ def handle_pre_tool_use(hook_data: dict[str, Any]) -> dict[str, Any]:
 
     if score.threshold_exceeded:
         warning = (
-            f"RTFI WARNING: Risk score {score.total:.1f} exceeds threshold {settings['threshold']}. "
+            f"RTFI WARNING: Risk score {score.total:.1f} "
+            f"exceeds threshold {settings['threshold']}. "
             f"Factors: context={score.context_length:.2f}, agents={score.agent_fanout:.2f}, "
             f"autonomy={score.autonomy_depth:.2f}, velocity={score.decision_velocity:.2f}, "
             f"displacement={score.instruction_displacement:.2f}. "
@@ -486,10 +492,7 @@ def handle_post_tool_use(hook_data: dict[str, Any]) -> dict[str, Any]:
 
     if state:
         # Detect compaction: context_tokens dropped below 50% of last reading
-        if (
-            state.last_context_tokens > 0
-            and context_tokens < state.last_context_tokens * 0.5
-        ):
+        if state.last_context_tokens > 0 and context_tokens < state.last_context_tokens * 0.5:
             state.skill_tokens_injected = 0
             logger.info(
                 f"Compaction detected: {state.last_context_tokens} -> {context_tokens}, "
@@ -543,7 +546,8 @@ def handle_stop(hook_data: dict[str, Any]) -> dict[str, Any]:
         state_dict = db.load_session_state(session_id)
         if state_dict:
             temp_state = SessionState.from_dict(
-                state_dict, session,
+                state_dict,
+                session,
                 agent_decay_seconds=settings.get("agent_decay_seconds", 300),
             )
             final_score = RiskScore.calculate(

@@ -27,15 +27,24 @@ from pathlib import Path
 script_dir = Path(__file__).parent
 sys.path.insert(0, str(script_dir))
 
-from rtfi_core import Database, EventType, RiskEngine, RiskEvent, RiskScore, Session, SessionOutcome, SessionState
+from rtfi_core import (
+    Database,
+    EventType,
+    RiskEngine,
+    RiskEvent,
+    RiskScore,
+    Session,
+    SessionOutcome,
+    SessionState,
+)
 
 THRESHOLD = 70.0
 
 # ANSI colors
-_G = "\033[32m"   # green
-_Y = "\033[33m"   # amber
-_R = "\033[31m"   # red
-_B = "\033[34m"   # blue
+_G = "\033[32m"  # green
+_Y = "\033[33m"  # amber
+_R = "\033[31m"  # red
+_B = "\033[34m"  # blue
 _DIM = "\033[2m"
 _BOLD = "\033[1m"
 _RESET = "\033[0m"
@@ -58,7 +67,11 @@ def _bar(score: float, width: int = 40) -> str:
 def _print_score(score: RiskScore, event_label: str = ""):
     c = _color_for(score.total)
     bar = _bar(score.total)
-    label = "NORMAL  " if score.total < THRESHOLD * 0.7 else ("ELEVATED" if score.total < THRESHOLD else "HIGH RISK")
+    label = (
+        "NORMAL  "
+        if score.total < THRESHOLD * 0.7
+        else ("ELEVATED" if score.total < THRESHOLD else "HIGH RISK")
+    )
     marker = f" {_R}◄ THRESHOLD EXCEEDED{_RESET}" if score.threshold_exceeded else ""
     print(f"  {bar} {c}{_BOLD}{score.total:5.1f}{_RESET} {c}{label}{_RESET}{marker}")
     if event_label:
@@ -125,7 +138,9 @@ def run_scenario(scenario: str, delay: float, db: Database, engine: RiskEngine) 
 
     if scenario == "fanout":
         _section("Scenario: Agent Fan-out (weight ×0.30)")
-        print(f"  {_DIM}Simulates Claude spawning parallel subagents without permission bounds.{_RESET}")
+        print(
+            f"  {_DIM}Simulates Claude spawning parallel subagents without permission bounds.{_RESET}"
+        )
         print(f"  {_DIM}Session: {session_id[:16]}...{_RESET}")
 
         _step(1, "Normal tool calls — baseline")
@@ -157,7 +172,9 @@ def run_scenario(scenario: str, delay: float, db: Database, engine: RiskEngine) 
 
     elif scenario == "velocity":
         _section("Scenario: Decision Velocity + Autonomy Drift")
-        print(f"  {_DIM}Simulates Claude making rapid tool calls without pausing for confirmation.{_RESET}")
+        print(
+            f"  {_DIM}Simulates Claude making rapid tool calls without pausing for confirmation.{_RESET}"
+        )
         print(f"  {_DIM}Session: {session_id[:16]}...{_RESET}")
 
         _step(1, "Slow start — user approves")
@@ -198,7 +215,9 @@ def run_scenario(scenario: str, delay: float, db: Database, engine: RiskEngine) 
 
     else:  # combined (default)
         _section("Scenario: Combined — Realistic High-Risk Session")
-        print(f"  {_DIM}Simulates a session that violates multiple constraints simultaneously.{_RESET}")
+        print(
+            f"  {_DIM}Simulates a session that violates multiple constraints simultaneously.{_RESET}"
+        )
         print(f"  {_DIM}Session: {session_id[:16]}...{_RESET}")
         print()
         print(f"  {_DIM}Declared constraints:{_RESET}")
@@ -233,12 +252,21 @@ def run_scenario(scenario: str, delay: float, db: Database, engine: RiskEngine) 
         emit(EventType.TOOL_CALL, "Write", 35000)
 
         _step(7, "Fourth agent spawn (exceeds limit further)")
-        emit(EventType.AGENT_SPAWN, "Task", 38000, "Spawning validation agent — still no confirmation")
+        emit(
+            EventType.AGENT_SPAWN,
+            "Task",
+            38000,
+            "Spawning validation agent — still no confirmation",
+        )
         emit(EventType.TOOL_CALL, "Bash", 40000, "Validation script running")
 
         _step(8, "Fifth agent + VIOLATION: Destructive Bash without asking — BREACH")
-        emit(EventType.AGENT_SPAWN, "Task", 42000, "Spawning cleanup agent — 5th agent, limit was 2")
-        emit(EventType.TOOL_CALL, "Bash", 45000, "⚠ 'rm -rf old_build/' — no confirmation requested")
+        emit(
+            EventType.AGENT_SPAWN, "Task", 42000, "Spawning cleanup agent — 5th agent, limit was 2"
+        )
+        emit(
+            EventType.TOOL_CALL, "Bash", 45000, "⚠ 'rm -rf old_build/' — no confirmation requested"
+        )
 
     return session_id
 
@@ -274,7 +302,11 @@ def print_summary(session: Session, session_id: str):
     c = _color_for(session.peak_risk_score)
     print(f"  Session ID  : {session_id}")
     print(f"  Peak Risk   : {c}{_BOLD}{session.peak_risk_score:.1f}{_RESET}")
-    print(f"  Final Risk  : {session.final_risk_score:.1f}" if session.final_risk_score else "  Final Risk  : —")
+    print(
+        f"  Final Risk  : {session.final_risk_score:.1f}"
+        if session.final_risk_score
+        else "  Final Risk  : —"
+    )
     print(f"  Tool Calls  : {session.total_tool_calls}")
     print(f"  Agent Spawns: {session.total_agent_spawns}")
     print(f"  Outcome     : {session.outcome.value}")
@@ -282,13 +314,19 @@ def print_summary(session: Session, session_id: str):
     print(f"  {_BOLD}Next steps:{_RESET}")
     print(f"  {_DIM}  • Dashboard: http://localhost:7430 — click this session row{_RESET}")
     print(f"  {_DIM}  • CLI:       python3 scripts/rtfi_cli.py show {session_id[:8]}{_RESET}")
-    print(f"  {_DIM}  • Analyze:   python3 scripts/demo_compliance_check.py {session_id[:8]}{_RESET}")
+    print(
+        f"  {_DIM}  • Analyze:   python3 scripts/demo_compliance_check.py {session_id[:8]}{_RESET}"
+    )
 
     if session.peak_risk_score >= THRESHOLD:
         print()
-        print(f"  {_R}{_BOLD}⚠  Threshold exceeded — RTFI would have issued this warning to Claude:{_RESET}")
-        print(f"  {_R}  \"RTFI WARNING: Risk score {session.peak_risk_score:.1f} exceeds threshold {THRESHOLD}.{_RESET}")
-        print(f"  {_R}   High probability of instruction non-compliance.\"{_RESET}")
+        print(
+            f"  {_R}{_BOLD}⚠  Threshold exceeded — RTFI would have issued this warning to Claude:{_RESET}"
+        )
+        print(
+            f'  {_R}  "RTFI WARNING: Risk score {session.peak_risk_score:.1f} exceeds threshold {THRESHOLD}.{_RESET}'
+        )
+        print(f'  {_R}   High probability of instruction non-compliance."{_RESET}')
 
 
 def main():

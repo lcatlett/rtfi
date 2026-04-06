@@ -11,11 +11,12 @@ import json
 import os
 import socket
 import sqlite3
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any
 
 __version__ = "1.2.0"
 
@@ -75,9 +76,7 @@ def risk_color(score: float) -> str:
 class StatsD:
     """Minimal StatsD client using UDP (no dependencies)."""
 
-    def __init__(
-        self, host: str = "localhost", port: int = 8125, prefix: str = "rtfi"
-    ) -> None:
+    def __init__(self, host: str = "localhost", port: int = 8125, prefix: str = "rtfi") -> None:
         self.host = host
         self.port = port
         self.prefix = prefix
@@ -171,16 +170,16 @@ class RiskScore:
         }
 
         displacement = (
-            min(1.0, skill_tokens_injected / instruction_tokens)
-            if instruction_tokens > 0
-            else 0.0
+            min(1.0, skill_tokens_injected / instruction_tokens) if instruction_tokens > 0 else 0.0
         )
 
         factors = {
             "context_length": min(1.0, tokens / max_tokens) if max_tokens > 0 else 0.0,
             "agent_fanout": min(1.0, active_agents / max_agents) if max_agents > 0 else 0.0,
             "autonomy_depth": min(1.0, steps_since_confirm / max_steps) if max_steps > 0 else 0.0,
-            "decision_velocity": min(1.0, tools_per_minute / max_tools_per_min) if max_tools_per_min > 0 else 0.0,
+            "decision_velocity": min(1.0, tools_per_minute / max_tools_per_min)
+            if max_tools_per_min > 0
+            else 0.0,
             "instruction_displacement": displacement,
         }
 
@@ -230,9 +229,7 @@ class Session:
 
 # ── Database ─────────────────────────────────────────────────────────────
 
-DEFAULT_DB_PATH = Path(
-    os.environ.get("RTFI_DB_PATH", str(Path.home() / ".rtfi" / "rtfi.db"))
-)
+DEFAULT_DB_PATH = Path(os.environ.get("RTFI_DB_PATH", str(Path.home() / ".rtfi" / "rtfi.db")))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -319,9 +316,7 @@ class Database:
             conn.execute("ALTER TABLE sessions ADD COLUMN project_dir TEXT")
         conn.commit()
 
-    def save_session(
-        self, session: Session, session_state: dict[str, Any] | None = None
-    ) -> None:
+    def save_session(self, session: Session, session_state: dict[str, Any] | None = None) -> None:
         """Save or update a session. Preserves session_state on updates (H1 fix).
 
         Uses INSERT OR IGNORE + UPDATE to avoid the DELETE semantics of
@@ -355,9 +350,16 @@ class Database:
 
         # Update existing row (preserves session_state unless explicitly provided)
         cols = [
-            "started_at=?", "ended_at=?", "instruction_source=?", "instruction_hash=?",
-            "final_risk_score=?", "peak_risk_score=?", "total_tool_calls=?",
-            "total_agent_spawns=?", "outcome=?", "project_dir=?",
+            "started_at=?",
+            "ended_at=?",
+            "instruction_source=?",
+            "instruction_hash=?",
+            "final_risk_score=?",
+            "peak_risk_score=?",
+            "total_tool_calls=?",
+            "total_agent_spawns=?",
+            "outcome=?",
+            "project_dir=?",
         ]
         params: list[Any] = [
             session.started_at.isoformat(),
@@ -424,9 +426,7 @@ class Database:
         """Retrieve a session by ID."""
         conn = self._connect()
         conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT * FROM sessions WHERE id = ?", (session_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
         conn.row_factory = None
         if row:
             return self._row_to_session(row)
@@ -461,9 +461,7 @@ class Database:
             return self._row_to_session(row)
         return None
 
-    def get_recent_sessions(
-        self, limit: int = 20, project_dir: str | None = None
-    ) -> list[Session]:
+    def get_recent_sessions(self, limit: int = 20, project_dir: str | None = None) -> list[Session]:
         """Get most recent sessions, optionally filtered by project."""
         conn = self._connect()
         conn.row_factory = sqlite3.Row
@@ -934,7 +932,13 @@ def load_settings(log_dir: Path | None = None) -> dict[str, Any]:
         ("max_agents", "RTFI_MAX_AGENTS", int, 5, (1, 1000)),
         ("max_steps", "RTFI_MAX_STEPS", int, 10, (1, 1000)),
         ("max_tools_per_min", "RTFI_MAX_TOOLS_PER_MIN", float, 20.0, (1, 1000)),
-        ("agent_decay_seconds", "RTFI_AGENT_DECAY_SECONDS", int, DEFAULT_AGENT_DECAY_SECONDS, (10, 3600)),
+        (
+            "agent_decay_seconds",
+            "RTFI_AGENT_DECAY_SECONDS",
+            int,
+            DEFAULT_AGENT_DECAY_SECONDS,
+            (10, 3600),
+        ),
         ("stale_session_hours", "RTFI_STALE_SESSION_HOURS", int, 2, (1, 168)),
         ("instruction_tokens", "RTFI_INSTRUCTION_TOKENS", int, 0, (0, 1_000_000)),
         ("system_prompt_tokens", "RTFI_SYSTEM_PROMPT_TOKENS", int, 2000, (0, 100_000)),

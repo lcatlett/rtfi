@@ -20,7 +20,6 @@ from hook_handler import (
     validate_hook_data,
 )
 
-
 # ── Input Validation Tests ───────────────────────────────────────────────
 
 
@@ -113,6 +112,7 @@ class TestHandlers:
         handle_pre_tool_use({"tool_name": "Read"})
 
         from hook_handler import engine
+
         session_id = os.environ.get("RTFI_SESSION_ID")
         state = engine.get_session_state(session_id)
         assert state.steps_since_confirm == 3
@@ -133,6 +133,7 @@ class TestHandlers:
         handle_pre_tool_use({"tool_name": "Read", "context_tokens": 5000})
 
         from hook_handler import db
+
         session_id = os.environ.get("RTFI_SESSION_ID")
 
         handle_stop({})
@@ -291,6 +292,7 @@ class TestHandlers:
     def test_verify_audit_log_all_rotated(self):
         """AC-9: verify_audit_log with verify_all=True checks rotated files."""
         import tempfile
+
         from hook_handler import sign_audit_entry, verify_audit_log
 
         with tempfile.TemporaryDirectory() as tmpdir:

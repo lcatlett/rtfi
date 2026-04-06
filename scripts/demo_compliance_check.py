@@ -26,13 +26,13 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 script_dir = Path(__file__).parent
 sys.path.insert(0, str(script_dir))
 
-from rtfi_core import Database, EventType, RiskEngine, RiskEvent, RiskScore, SessionOutcome, SessionState
+from rtfi_core import Database, EventType, RiskEngine, RiskEvent, RiskScore
 
 # ANSI
 _G = "\033[32m"
@@ -114,7 +114,12 @@ def replay_session(
     results = []
     for event in events:
         try:
-            if event.event_type in (EventType.TOOL_CALL, EventType.AGENT_SPAWN, EventType.RESPONSE, EventType.CHECKPOINT):
+            if event.event_type in (
+                EventType.TOOL_CALL,
+                EventType.AGENT_SPAWN,
+                EventType.RESPONSE,
+                EventType.CHECKPOINT,
+            ):
                 score = engine.process_event(event)
                 results.append((event, score))
             else:
@@ -151,19 +156,21 @@ def check_constraints(
             # C1: max agents
             if "max_agents" in c and event.event_type == EventType.AGENT_SPAWN:
                 if active_agents > c["max_agents"]:
-                    check.violations.append(Violation(
-                        constraint_id=cid,
-                        constraint_name=c["name"],
-                        step=step_num,
-                        tool=event.tool_name,
-                        event_type=event.event_type.value,
-                        timestamp=ts,
-                        evidence=(
-                            f"Agent #{active_agents} spawned — exceeds limit of {c['max_agents']}. "
-                            f"Tool: {event.tool_name or 'Task'}"
-                        ),
-                        severity="violation",
-                    ))
+                    check.violations.append(
+                        Violation(
+                            constraint_id=cid,
+                            constraint_name=c["name"],
+                            step=step_num,
+                            tool=event.tool_name,
+                            event_type=event.event_type.value,
+                            timestamp=ts,
+                            evidence=(
+                                f"Agent #{active_agents} spawned — exceeds limit of {c['max_agents']}. "
+                                f"Tool: {event.tool_name or 'Task'}"
+                            ),
+                            severity="violation",
+                        )
+                    )
 
             # C2: max steps without confirm
             if "max_steps_without_confirm" in c:
@@ -172,20 +179,22 @@ def check_constraints(
                         # Only record first breach and every 3rd thereafter to reduce noise
                         breach_n = steps_since_confirm - c["max_steps_without_confirm"]
                         if breach_n == 1 or breach_n % 3 == 0:
-                            check.violations.append(Violation(
-                                constraint_id=cid,
-                                constraint_name=c["name"],
-                                step=step_num,
-                                tool=event.tool_name,
-                                event_type=event.event_type.value,
-                                timestamp=ts,
-                                evidence=(
-                                    f"Step {steps_since_confirm} without confirmation "
-                                    f"(limit: {c['max_steps_without_confirm']}). "
-                                    f"Tool: {event.tool_name or '—'}"
-                                ),
-                                severity="violation",
-                            ))
+                            check.violations.append(
+                                Violation(
+                                    constraint_id=cid,
+                                    constraint_name=c["name"],
+                                    step=step_num,
+                                    tool=event.tool_name,
+                                    event_type=event.event_type.value,
+                                    timestamp=ts,
+                                    evidence=(
+                                        f"Step {steps_since_confirm} without confirmation "
+                                        f"(limit: {c['max_steps_without_confirm']}). "
+                                        f"Tool: {event.tool_name or '—'}"
+                                    ),
+                                    severity="violation",
+                                )
+                            )
 
             # C3: context token guard
             if "max_tokens" in c and score and score.context_length > 0:
@@ -194,42 +203,48 @@ def check_constraints(
                 if event.context_tokens and event.context_tokens > c["max_tokens"]:
                     # Only warn once
                     if not any(v.constraint_id == cid for v in check.violations):
-                        check.violations.append(Violation(
-                            constraint_id=cid,
-                            constraint_name=c["name"],
-                            step=step_num,
-                            tool=event.tool_name,
-                            event_type=event.event_type.value,
-                            timestamp=ts,
-                            evidence=(
-                                f"Context at {event.context_tokens:,} tokens — "
-                                f"exceeds {c['max_tokens']:,} token guard. "
-                                f"Instructions may be degraded."
-                            ),
-                            severity="warning",
-                        ))
+                        check.violations.append(
+                            Violation(
+                                constraint_id=cid,
+                                constraint_name=c["name"],
+                                step=step_num,
+                                tool=event.tool_name,
+                                event_type=event.event_type.value,
+                                timestamp=ts,
+                                evidence=(
+                                    f"Context at {event.context_tokens:,} tokens — "
+                                    f"exceeds {c['max_tokens']:,} token guard. "
+                                    f"Instructions may be degraded."
+                                ),
+                                severity="warning",
+                            )
+                        )
 
             # C4: overall risk threshold
             if "max_risk_score" in c and score:
                 if score.threshold_exceeded and score.total >= c["max_risk_score"]:
-                    if not any(v.constraint_id == cid and v.step == step_num for v in check.violations):
-                        check.violations.append(Violation(
-                            constraint_id=cid,
-                            constraint_name=c["name"],
-                            step=step_num,
-                            tool=event.tool_name,
-                            event_type=event.event_type.value,
-                            timestamp=ts,
-                            evidence=(
-                                f"Risk score {score.total:.1f} ≥ threshold {c['max_risk_score']}. "
-                                f"Factors: context={score.context_length:.2f}, "
-                                f"agents={score.agent_fanout:.2f}, "
-                                f"autonomy={score.autonomy_depth:.2f}, "
-                                f"velocity={score.decision_velocity:.2f}, "
-                                f"displacement={score.instruction_displacement:.2f}"
-                            ),
-                            severity="violation",
-                        ))
+                    if not any(
+                        v.constraint_id == cid and v.step == step_num for v in check.violations
+                    ):
+                        check.violations.append(
+                            Violation(
+                                constraint_id=cid,
+                                constraint_name=c["name"],
+                                step=step_num,
+                                tool=event.tool_name,
+                                event_type=event.event_type.value,
+                                timestamp=ts,
+                                evidence=(
+                                    f"Risk score {score.total:.1f} ≥ threshold {c['max_risk_score']}. "
+                                    f"Factors: context={score.context_length:.2f}, "
+                                    f"agents={score.agent_fanout:.2f}, "
+                                    f"autonomy={score.autonomy_depth:.2f}, "
+                                    f"velocity={score.decision_velocity:.2f}, "
+                                    f"displacement={score.instruction_displacement:.2f}"
+                                ),
+                                severity="violation",
+                            )
+                        )
 
     return checks
 
@@ -260,10 +275,14 @@ def print_report(session, checks: list[ConstraintCheck], replay: list):
     print(f"  Session  : {session.id}")
     print(f"  Started  : {session.started_at.strftime('%Y-%m-%d %H:%M:%S UTC')}")
     print(f"  Events   : {len(replay)}")
-    print(f"  Peak Risk: {_color_for(session.peak_risk_score)}{_BOLD}{session.peak_risk_score:.1f}{_RESET}")
+    print(
+        f"  Peak Risk: {_color_for(session.peak_risk_score)}{_BOLD}{session.peak_risk_score:.1f}{_RESET}"
+    )
     print(f"  Outcome  : {session.outcome.value}")
     print()
-    print(f"  Constraints: {_G}{passed} passed{_RESET} / {_Y}{warned} warnings{_RESET} / {_R}{failed} failed{_RESET} of {total} total")
+    print(
+        f"  Constraints: {_G}{passed} passed{_RESET} / {_Y}{warned} warnings{_RESET} / {_R}{failed} failed{_RESET} of {total} total"
+    )
 
     overall = "COMPLIANT" if failed == 0 else "NON-COMPLIANT"
     overall_color = _G if failed == 0 else _R
@@ -283,7 +302,9 @@ def print_report(session, checks: list[ConstraintCheck], replay: list):
             for v in check.violations:
                 ts = v.timestamp.strftime("%H:%M:%S")
                 print(f"\n          {_severity_icon(v.severity)} at step {v.step} ({ts})")
-                print(f"          {_DIM}Event: {v.event_type}{' → ' + v.tool if v.tool else ''}{_RESET}")
+                print(
+                    f"          {_DIM}Event: {v.event_type}{' → ' + v.tool if v.tool else ''}{_RESET}"
+                )
                 print(f"          {v.evidence}")
 
     # Score decomposition
@@ -292,16 +313,14 @@ def print_report(session, checks: list[ConstraintCheck], replay: list):
     print(f"  {'Factor':<20} {'Weight':>7}  {'Contribution'}")
     print(f"  {'─' * 50}")
     if replay:
-        last_score = next(
-            (score for _, score in reversed(replay) if score is not None), None
-        )
+        last_score = next((score for _, score in reversed(replay) if score is not None), None)
         if last_score:
             factors = [
-                ("Context Length",  last_score.context_length,  0.20),
-                ("Agent Fanout",    last_score.agent_fanout,    0.30),
-                ("Autonomy Depth",  last_score.autonomy_depth,  0.25),
+                ("Context Length", last_score.context_length, 0.20),
+                ("Agent Fanout", last_score.agent_fanout, 0.30),
+                ("Autonomy Depth", last_score.autonomy_depth, 0.25),
                 ("Decision Velocity", last_score.decision_velocity, 0.15),
-                ("Displacement",    last_score.instruction_displacement, 0.10),
+                ("Displacement", last_score.instruction_displacement, 0.10),
             ]
             for name, val, weight in factors:
                 contrib = val * weight * 100
@@ -310,7 +329,9 @@ def print_report(session, checks: list[ConstraintCheck], replay: list):
                 print(f"  {name:<20} ×{weight:.2f}   {bar}  {c}{contrib:5.1f}pts{_RESET}")
             print(f"  {'─' * 50}")
             tc = _color_for(last_score.total)
-            print(f"  {'TOTAL':<20}        {'':21}  {tc}{_BOLD}{last_score.total:5.1f} / 100{_RESET}")
+            print(
+                f"  {'TOTAL':<20}        {'':21}  {tc}{_BOLD}{last_score.total:5.1f} / 100{_RESET}"
+            )
 
     # What RTFI told Claude
     threshold_events = [(s, e) for (e, s) in replay if s and s.threshold_exceeded]
@@ -318,14 +339,22 @@ def print_report(session, checks: list[ConstraintCheck], replay: list):
         print(f"\n{_BOLD}{'─' * 64}{_RESET}")
         print(f"{_BOLD}  ⚠  What RTFI Told Claude (systemMessage at threshold breach){_RESET}")
         first_score = threshold_events[0][0]
-        print(f"\n  {_R}\"RTFI WARNING: Risk score {first_score.total:.1f} exceeds threshold {THRESHOLD}.")
-        print(f"   Factors: context={first_score.context_length:.2f}, agents={first_score.agent_fanout:.2f},")
-        print(f"   autonomy={first_score.autonomy_depth:.2f}, velocity={first_score.decision_velocity:.2f},")
+        print(
+            f'\n  {_R}"RTFI WARNING: Risk score {first_score.total:.1f} exceeds threshold {THRESHOLD}.'
+        )
+        print(
+            f"   Factors: context={first_score.context_length:.2f}, agents={first_score.agent_fanout:.2f},"
+        )
+        print(
+            f"   autonomy={first_score.autonomy_depth:.2f}, velocity={first_score.decision_velocity:.2f},"
+        )
         print(f"   displacement={first_score.instruction_displacement:.2f}.")
-        print(f"   High probability of instruction non-compliance.\"{_RESET}")
+        print(f'   High probability of instruction non-compliance."{_RESET}')
 
     print(f"\n{_BOLD}{'─' * 64}{_RESET}")
-    print(f"  {_DIM}Improve instructions: use 'RTFI session-analyzer' agent for CLAUDE.md suggestions{_RESET}")
+    print(
+        f"  {_DIM}Improve instructions: use 'RTFI session-analyzer' agent for CLAUDE.md suggestions{_RESET}"
+    )
     print(f"{_BOLD}{'═' * 64}{_RESET}\n")
 
 
@@ -399,7 +428,9 @@ def main():
                 "peak_risk": session.peak_risk_score,
                 "event_count": len(events),
                 "outcome": session.outcome.value,
-                "verdict": "NON-COMPLIANT" if any(c.status == "FAIL" for c in checks) else "COMPLIANT",
+                "verdict": "NON-COMPLIANT"
+                if any(c.status == "FAIL" for c in checks)
+                else "COMPLIANT",
                 "constraints": [
                     {
                         "id": c.constraint["id"],

@@ -5,9 +5,7 @@ description = "RTFI Claude Code Plugin - Real-Time Instruction Compliance Risk S
 requires-python = ">=3.10"
 license = { text = "MIT" }
 
-dependencies = [
-    "pydantic>=2.0.0",
-]
+dependencies = []
 
 [project.optional-dependencies]
 dev = [

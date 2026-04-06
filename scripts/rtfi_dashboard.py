@@ -5,6 +5,7 @@ import argparse
 import json
 import sys
 import webbrowser
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -86,7 +87,7 @@ def _event_to_dict(event) -> dict:
         "event_type": event.event_type.value,
         "tool_name": event.tool_name,
         "context_tokens": event.context_tokens,
-        "risk_score": event.risk_score.model_dump() if event.risk_score else None,
+        "risk_score": asdict(event.risk_score) if event.risk_score else None,
         "metadata": event.metadata,
     }
 

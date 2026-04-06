@@ -11,13 +11,11 @@ import json
 import os
 import socket
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterator
-
-from pydantic import BaseModel, Field
 
 __version__ = "1.2.0"
 
@@ -133,20 +131,19 @@ class SessionOutcome(str, Enum):
     IN_PROGRESS = "in_progress"
 
 
-# ── Pydantic Models ─────────────────────────────────────────────────────
+# ── Data Models ─────────────────────────────────────────────────────────
 
 
-class RiskScore(BaseModel):
+@dataclass
+class RiskScore:
     """Calculated risk score with component breakdown."""
 
-    total: float = Field(ge=0, le=100, description="Overall risk score 0-100")
-    context_length: float = Field(ge=0, le=1, description="Context length factor")
-    agent_fanout: float = Field(ge=0, le=1, description="Agent fanout factor")
-    autonomy_depth: float = Field(ge=0, le=1, description="Autonomy depth factor")
-    decision_velocity: float = Field(ge=0, le=1, description="Decision velocity factor")
-    instruction_displacement: float = Field(
-        default=0.0, ge=0, le=1, description="Instruction displacement factor"
-    )
+    total: float = 0.0
+    context_length: float = 0.0
+    agent_fanout: float = 0.0
+    autonomy_depth: float = 0.0
+    decision_velocity: float = 0.0
+    instruction_displacement: float = 0.0
     threshold_exceeded: bool = False
 
     @classmethod
@@ -200,24 +197,26 @@ class RiskScore(BaseModel):
         )
 
 
-class RiskEvent(BaseModel):
+@dataclass
+class RiskEvent:
     """A single event in a session that affects risk score."""
 
-    id: int | None = None
     session_id: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     event_type: EventType
+    id: int | None = None
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     tool_name: str | None = None
     context_tokens: int = 0
     risk_score: RiskScore | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
-class Session(BaseModel):
+@dataclass
+class Session:
     """An RTFI-monitored session."""
 
     id: str
-    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     ended_at: datetime | None = None
     instruction_source: str | None = None
     instruction_hash: str | None = None
@@ -413,7 +412,7 @@ class Database:
                 event.tool_name,
                 event.context_tokens,
                 event.risk_score.total if event.risk_score else None,
-                json.dumps(event.risk_score.model_dump()) if event.risk_score else None,
+                json.dumps(asdict(event.risk_score)) if event.risk_score else None,
                 1 if event.risk_score and event.risk_score.threshold_exceeded else 0,
                 json.dumps(event.metadata) if event.metadata else None,
             ),

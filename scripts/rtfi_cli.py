@@ -9,13 +9,6 @@ from pathlib import Path
 script_dir = Path(__file__).parent
 sys.path.insert(0, str(script_dir))
 
-# Check dependencies (no auto-install — H5)
-try:
-    import pydantic  # noqa: F401
-except ImportError:
-    print("Error: Missing dependency 'pydantic'. Run: uv pip install pydantic>=2.0.0 (or pip3 install pydantic>=2.0.0)")
-    sys.exit(1)
-
 from rtfi_core import Database, load_settings, risk_level
 
 
@@ -190,16 +183,7 @@ def cmd_setup(args):
         errors.append(f"Python >= 3.10 required, found {v.major}.{v.minor}")
         print(f"[ERROR] Python {v.major}.{v.minor} — requires >= 3.10")
 
-    # 2. Check pydantic
-    try:
-        import pydantic
-        print(f"[OK] pydantic {pydantic.__version__}")
-    except ImportError:
-        errors.append("pydantic not installed")
-        print("[ERROR] pydantic not installed")
-        print("        Run: uv pip install pydantic>=2.0.0 (or pip3 install pydantic>=2.0.0)")
-
-    # 3. Create ~/.rtfi/ with correct permissions
+    # 2. Create ~/.rtfi/ with correct permissions
     rtfi_dir = Path.home() / ".rtfi"
     rtfi_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     print(f"[OK] Directory: {rtfi_dir}")
@@ -267,15 +251,6 @@ def cmd_health(args):
     print("=" * 50)
 
     errors = []
-
-    # Check dependencies
-    try:
-        import pydantic
-
-        print(f"[OK] pydantic {pydantic.__version__}")
-    except ImportError:
-        errors.append("pydantic not installed")
-        print("[ERROR] pydantic not installed")
 
     # Check database
     try:

@@ -68,17 +68,6 @@ audit_logger.setLevel(logging.INFO)
 script_dir = Path(__file__).parent
 sys.path.insert(0, str(script_dir))
 
-# Check dependencies BEFORE importing rtfi_core
-try:
-    import pydantic  # noqa: F401
-except ImportError:
-    logger.error("RTFI: Missing dependency 'pydantic'. Run: uv pip install pydantic>=2.0.0")
-    print(json.dumps({
-        "continue": True,
-        "systemMessage": "RTFI: Missing dependency 'pydantic'. Run: uv pip install pydantic>=2.0.0"
-    }))
-    sys.exit(0)
-
 from rtfi_core import (
     Database,
     EventType,

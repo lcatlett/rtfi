@@ -5,6 +5,7 @@ import argparse
 import json
 import sys
 import webbrowser
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -22,8 +23,6 @@ from rtfi_core import (
     SessionState,
     __version__,
     load_settings,
-    risk_color,
-    risk_level,
 )
 
 # ---------------------------------------------------------------------------
@@ -48,6 +47,7 @@ def _threshold() -> float:
 # ---------------------------------------------------------------------------
 # JSON helpers
 # ---------------------------------------------------------------------------
+
 
 def _json_serial(obj):
     """JSON serializer for objects not serializable by default."""
@@ -86,7 +86,7 @@ def _event_to_dict(event) -> dict:
         "event_type": event.event_type.value,
         "tool_name": event.tool_name,
         "context_tokens": event.context_tokens,
-        "risk_score": event.risk_score.model_dump() if event.risk_score else None,
+        "risk_score": asdict(event.risk_score) if event.risk_score else None,
         "metadata": event.metadata,
     }
 
@@ -94,6 +94,7 @@ def _event_to_dict(event) -> dict:
 # ---------------------------------------------------------------------------
 # API route handlers
 # ---------------------------------------------------------------------------
+
 
 def api_config() -> dict:
     """GET /api/config"""
@@ -184,7 +185,7 @@ def api_sessions(db: Database, params: dict) -> dict:
     all_sessions = db.get_recent_sessions(limit=limit + offset)
     total = len(all_sessions)
     # Manual offset since get_recent_sessions doesn't support it
-    page = all_sessions[offset:offset + limit]
+    page = all_sessions[offset : offset + limit]
 
     stale_hours = int(_settings.get("stale_session_hours", STALE_SESSION_HOURS))
     sessions = [_session_to_dict(s, stale_hours) for s in page]
@@ -285,10 +286,7 @@ def api_chart_data(db: Database, params: dict) -> dict:
         (cutoff,),
     ).fetchall()
 
-    tool_usage = [
-        {"tool": row[0], "count": row[1], "avg_risk": row[2] or 0}
-        for row in tool_rows
-    ]
+    tool_usage = [{"tool": row[0], "count": row[1], "avg_risk": row[2] or 0} for row in tool_rows]
 
     # Risk distribution — 10 bins (0-9, 10-19, ..., 90-100)
     distribution = [0] * 10
@@ -311,6 +309,7 @@ def api_chart_data(db: Database, params: dict) -> dict:
 # ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
+
 
 class DashboardHandler(BaseHTTPRequestHandler):
     """Routes GET requests to JSON API handlers or serves static HTML."""
@@ -353,7 +352,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif path == "/api/sessions":
                 data = api_sessions(db, params)
             elif path.startswith("/api/session/"):
-                session_id = path[len("/api/session/"):]
+                session_id = path[len("/api/session/") :]
                 if not session_id:
                     data = {"error": "Missing session ID"}
                 else:
@@ -389,6 +388,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def serve(port: int, open_browser: bool) -> None:
     _load_config()

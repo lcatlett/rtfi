@@ -1,10 +1,10 @@
 .PHONY: test lint typecheck format install dev clean
 
 install:
-	$(if $(shell command -v uv 2>/dev/null),uv pip install,pip install) pydantic>=2.0.0
+	@echo "No dependencies to install — RTFI uses Python stdlib only."
 
 dev:
-	$(if $(shell command -v uv 2>/dev/null),uv pip install,pip install) pydantic>=2.0.0 pytest pytest-cov mypy ruff
+	$(if $(shell command -v uv 2>/dev/null),uv pip install,pip install) pytest pytest-cov mypy ruff
 
 test:
 	pytest tests/ -v --tb=short

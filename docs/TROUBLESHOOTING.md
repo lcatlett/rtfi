@@ -2,32 +2,23 @@
 
 ## Common Issues
 
-### ModuleNotFoundError: No module named 'pydantic'
+### Python Version Too Old
 
-**Symptom:** Hook errors showing `ModuleNotFoundError: No module named 'pydantic'`
+**Symptom:** `SyntaxError` or `TypeError` on startup, or setup script reports `Python >= 3.10 required`
+
+**Cause:** `python3` resolves to macOS system Python (3.9.6), which is too old for RTFI.
 
 **Solution:**
 
-Install the missing dependency:
+1. **Install Python via mise (recommended):**
+   ```bash
+   mise install          # installs Python 3.14 per .mise.toml
+   python3 --version     # should show 3.14.x, not 3.9.6
+   ```
 
-1. **Run the setup script:**
+2. **Re-run setup:**
    ```bash
    bash scripts/setup.sh
-   ```
-
-2. **Or install manually with uv (recommended):**
-   ```bash
-   uv pip install pydantic>=2.0.0
-   ```
-
-3. **Or install with pip:**
-   ```bash
-   pip3 install --user pydantic>=2.0.0
-   ```
-
-3. **Verify installation:**
-   ```bash
-   python3 -c "import pydantic; print(pydantic.__version__)"
    ```
 
 ### Hook Handler Errors on Startup

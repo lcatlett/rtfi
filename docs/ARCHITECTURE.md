@@ -321,7 +321,7 @@ rtfi/
 | **Privacy** | All data local | SQLite at `~/.rtfi/`, no cloud calls, no telemetry |
 | **Observability** | Structured JSON logs + optional metrics | M4 (JSON), L3 (StatsD), M5 (HMAC audit) |
 | **Testability** | 63 tests, 3-tier suite | Unit (core, hook handler, dashboard), integration (subprocess) |
-| **Portability** | Python 3.10+, single dependency | Only `pydantic>=2.0.0`, stdlib SQLite |
+| **Portability** | Python 3.10+, zero dependencies | stdlib only (dataclasses, sqlite3, json, pathlib) |
 
 ---
 

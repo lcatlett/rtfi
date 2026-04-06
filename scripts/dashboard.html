@@ -480,10 +480,11 @@ function renderGauge(data) {
         : '<span style="color:var(--slate-light)">\u25C9</span> LAST SESSION';
 
     const factors = [
-        { name: 'Context', val: score.context_length, weight: '\u00d70.25' },
+        { name: 'Context', val: score.context_length, weight: '\u00d70.20' },
         { name: 'Fanout', val: score.agent_fanout, weight: '\u00d70.30' },
         { name: 'Autonomy', val: score.autonomy_depth, weight: '\u00d70.25' },
-        { name: 'Velocity', val: score.decision_velocity, weight: '\u00d70.20' },
+        { name: 'Velocity', val: score.decision_velocity, weight: '\u00d70.15' },
+        { name: 'Displacement', val: score.instruction_displacement || 0, weight: '\u00d70.10' },
     ];
 
     let barsHtml = '';
@@ -662,10 +663,10 @@ function renderRadar(score) {
     charts.radar = new Chart(ctx, {
         type: 'radar',
         data: {
-            labels: ['Context (\u00d70.25)', 'Fanout (\u00d70.30)', 'Autonomy (\u00d70.25)', 'Velocity (\u00d70.20)'],
+            labels: ['Context (\u00d70.20)', 'Fanout (\u00d70.30)', 'Autonomy (\u00d70.25)', 'Velocity (\u00d70.15)', 'Displacement (\u00d70.10)'],
             datasets: [{
                 label: 'Risk Factors',
-                data: [score.context_length * 100, score.agent_fanout * 100, score.autonomy_depth * 100, score.decision_velocity * 100],
+                data: [score.context_length * 100, score.agent_fanout * 100, score.autonomy_depth * 100, score.decision_velocity * 100, (score.instruction_displacement || 0) * 100],
                 backgroundColor: 'rgba(37, 99, 235, 0.15)',
                 borderColor: '#2563EB', borderWidth: 2, pointBackgroundColor: '#2563EB', pointRadius: 4,
             }],
@@ -786,11 +787,11 @@ async function openSessionModal(sid) {
         charts.modalFactors = new Chart(ctx, {
             type: 'bar',
             data: {
-                labels: ['Context', 'Fanout', 'Autonomy', 'Velocity'],
+                labels: ['Context', 'Fanout', 'Autonomy', 'Velocity', 'Displacement'],
                 datasets: [{
                     label: 'Factor Value (%)',
-                    data: [rs.context_length * 100, rs.agent_fanout * 100, rs.autonomy_depth * 100, rs.decision_velocity * 100],
-                    backgroundColor: ['#BFDBFE', '#FDE68A', '#DDD6FE', '#A7F3D0'],
+                    data: [rs.context_length * 100, rs.agent_fanout * 100, rs.autonomy_depth * 100, rs.decision_velocity * 100, (rs.instruction_displacement || 0) * 100],
+                    backgroundColor: ['#BFDBFE', '#FDE68A', '#DDD6FE', '#A7F3D0', '#FECACA'],
                     borderRadius: 6,
                 }],
             },

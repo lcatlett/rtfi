@@ -3,7 +3,6 @@
 import json
 import subprocess
 import tempfile
-import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -18,31 +17,49 @@ def dashboard_server():
     db_path = str(Path(tmp_dir) / "test.db")
     # Find a free port
     import socket
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
+        s.bind(("", 0))
         port = s.getsockname()[1]
 
     # Pre-populate the DB with a session
     import sys
+
     sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-    from rtfi_core import Database, Session, SessionOutcome, RiskEvent, EventType, RiskScore
+    from rtfi_core import Database, EventType, RiskEvent, RiskScore, Session, SessionOutcome
+
     db = Database(db_path=Path(db_path))
-    session = Session(id="test-dash-001", peak_risk_score=45.5, total_tool_calls=10,
-                      total_agent_spawns=2, outcome=SessionOutcome.COMPLETED)
+    session = Session(
+        id="test-dash-001",
+        peak_risk_score=45.5,
+        total_tool_calls=10,
+        total_agent_spawns=2,
+        outcome=SessionOutcome.COMPLETED,
+    )
     db.save_session(session)
-    score = RiskScore.calculate(tokens=5000, active_agents=1, steps_since_confirm=3, tools_per_minute=5.0)
-    event = RiskEvent(session_id="test-dash-001", event_type=EventType.TOOL_CALL,
-                      tool_name="Read", context_tokens=5000, risk_score=score)
+    score = RiskScore.calculate(
+        tokens=5000, active_agents=1, steps_since_confirm=3, tools_per_minute=5.0
+    )
+    event = RiskEvent(
+        session_id="test-dash-001",
+        event_type=EventType.TOOL_CALL,
+        tool_name="Read",
+        context_tokens=5000,
+        risk_score=score,
+    )
     db.save_event(event)
     db.close()
 
     hook_script = str(Path(__file__).parent.parent / "scripts" / "rtfi_dashboard.py")
     import os
+
     env = {**os.environ, "RTFI_DB_PATH": db_path}
 
     proc = subprocess.Popen(
         ["python3", hook_script, "--no-browser", "--port", str(port)],
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
     time.sleep(1.5)  # Wait for server to start
 
@@ -51,6 +68,7 @@ def dashboard_server():
     proc.terminate()
     proc.wait(timeout=5)
     import shutil
+
     shutil.rmtree(tmp_dir, ignore_errors=True)
 
 

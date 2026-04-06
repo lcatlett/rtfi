@@ -12,8 +12,6 @@ import tempfile
 import uuid
 from pathlib import Path
 
-import pytest
-
 
 class TestCrossProcessStatePersistence:
     """Integration tests that invoke hook_handler.py as subprocess (matching production)."""
@@ -61,7 +59,8 @@ class TestCrossProcessStatePersistence:
 
             conn = sqlite3.connect(self.db_path)
             row = conn.execute(
-                "SELECT risk_score_total FROM risk_events WHERE session_id=? ORDER BY id DESC LIMIT 1",
+                "SELECT risk_score_total FROM risk_events"
+                " WHERE session_id=? ORDER BY id DESC LIMIT 1",
                 (self.session_id,),
             ).fetchone()
             conn.close()

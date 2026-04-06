@@ -1,13 +1,11 @@
 """Tests for rtfi_core.py - models, scoring engine, database, and config."""
 
-import json
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-
 from rtfi_core import (
     Database,
     EventType,
@@ -17,10 +15,10 @@ from rtfi_core import (
     Session,
     SessionOutcome,
     SessionState,
+    estimate_tokens,
     load_settings,
     risk_level,
 )
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -46,37 +44,162 @@ class TestRiskScore:
 
     def test_calculate_all_max(self):
         score = RiskScore.calculate(
-            tokens=200000, active_agents=10, steps_since_confirm=20, tools_per_minute=40.0
+            tokens=200000,
+            active_agents=10,
+            steps_since_confirm=20,
+            tools_per_minute=40.0,
+            skill_tokens_injected=5000,
+            instruction_tokens=2500,
         )
         assert score.total == 100.0
+        assert score.threshold_exceeded
+
+    def test_calculate_all_max_without_displacement(self):
+        """Without displacement params, max is 90 (displacement weight=0.10 contributes 0)."""
+        score = RiskScore.calculate(
+            tokens=200000,
+            active_agents=10,
+            steps_since_confirm=20,
+            tools_per_minute=40.0,
+        )
+        assert score.total == 90.0
         assert score.threshold_exceeded
 
     def test_threshold_boundary(self):
         # Just below default threshold
         score_below = RiskScore.calculate(
-            tokens=0, active_agents=0, steps_since_confirm=0, tools_per_minute=0.0,
+            tokens=0,
+            active_agents=0,
+            steps_since_confirm=0,
+            tools_per_minute=0.0,
             threshold=70.0,
         )
         assert not score_below.threshold_exceeded
 
-        # At threshold
+        # At threshold — all 5 factors maxed
         score_at = RiskScore.calculate(
-            tokens=128000, active_agents=5, steps_since_confirm=10, tools_per_minute=20.0,
+            tokens=128000,
+            active_agents=5,
+            steps_since_confirm=10,
+            tools_per_minute=20.0,
+            skill_tokens_injected=5000,
+            instruction_tokens=2500,
             threshold=100.0,
         )
         assert score_at.threshold_exceeded
 
     def test_custom_ceilings(self):
         score = RiskScore.calculate(
-            tokens=32000, active_agents=1, steps_since_confirm=2, tools_per_minute=5.0,
-            max_tokens=32000, max_agents=1, max_steps=2, max_tools_per_min=5.0,
+            tokens=32000,
+            active_agents=1,
+            steps_since_confirm=2,
+            tools_per_minute=5.0,
+            max_tokens=32000,
+            max_agents=1,
+            max_steps=2,
+            max_tools_per_min=5.0,
+            skill_tokens_injected=5000,
+            instruction_tokens=2500,
         )
         assert score.total == 100.0
 
     def test_agent_fanout_highest_weight(self):
-        score_agents = RiskScore.calculate(tokens=0, active_agents=10, steps_since_confirm=0, tools_per_minute=0.0)
-        score_context = RiskScore.calculate(tokens=200000, active_agents=0, steps_since_confirm=0, tools_per_minute=0.0)
+        score_agents = RiskScore.calculate(
+            tokens=0, active_agents=10, steps_since_confirm=0, tools_per_minute=0.0
+        )
+        score_context = RiskScore.calculate(
+            tokens=200000, active_agents=0, steps_since_confirm=0, tools_per_minute=0.0
+        )
         assert score_agents.total > score_context.total
+
+    def test_displacement_zero_when_no_instruction_tokens(self):
+        score = RiskScore.calculate(
+            tokens=50000,
+            active_agents=0,
+            steps_since_confirm=0,
+            tools_per_minute=0.0,
+            skill_tokens_injected=10000,
+            instruction_tokens=0,
+        )
+        assert score.instruction_displacement == 0.0
+
+    def test_displacement_zero_when_no_skill_tokens(self):
+        score = RiskScore.calculate(
+            tokens=50000,
+            active_agents=0,
+            steps_since_confirm=0,
+            tools_per_minute=0.0,
+            skill_tokens_injected=0,
+            instruction_tokens=2500,
+        )
+        assert score.instruction_displacement == 0.0
+
+    def test_displacement_scales_with_skill_tokens(self):
+        score_low = RiskScore.calculate(
+            tokens=50000,
+            active_agents=0,
+            steps_since_confirm=0,
+            tools_per_minute=0.0,
+            skill_tokens_injected=500,
+            instruction_tokens=2500,
+        )
+        score_high = RiskScore.calculate(
+            tokens=50000,
+            active_agents=0,
+            steps_since_confirm=0,
+            tools_per_minute=0.0,
+            skill_tokens_injected=2500,
+            instruction_tokens=2500,
+        )
+        assert score_low.instruction_displacement == 0.2
+        assert score_high.instruction_displacement == 1.0
+        assert score_high.total > score_low.total
+
+    def test_displacement_caps_at_one(self):
+        score = RiskScore.calculate(
+            tokens=50000,
+            active_agents=0,
+            steps_since_confirm=0,
+            tools_per_minute=0.0,
+            skill_tokens_injected=50000,
+            instruction_tokens=2500,
+        )
+        assert score.instruction_displacement == 1.0
+
+    def test_displacement_weight_is_010(self):
+        """Displacement at 1.0 with all other factors at 0 should contribute exactly 10 points."""
+        score = RiskScore.calculate(
+            tokens=0,
+            active_agents=0,
+            steps_since_confirm=0,
+            tools_per_minute=0.0,
+            skill_tokens_injected=5000,
+            instruction_tokens=2500,
+        )
+        assert score.total == 10.0
+
+    def test_all_five_weights_sum_to_one(self):
+        """Weight distribution must sum to 1.0."""
+        score = RiskScore.calculate(
+            tokens=128000,
+            active_agents=5,
+            steps_since_confirm=10,
+            tools_per_minute=20.0,
+            skill_tokens_injected=5000,
+            instruction_tokens=2500,
+        )
+        assert score.total == 100.0
+
+    def test_backward_compat_default_displacement(self):
+        """Calling calculate() without displacement params should still work."""
+        score = RiskScore.calculate(
+            tokens=64000,
+            active_agents=2,
+            steps_since_confirm=5,
+            tools_per_minute=10.0,
+        )
+        assert score.instruction_displacement == 0.0
+        assert score.total > 0
 
 
 # ── Database Tests ───────────────────────────────────────────────────────
@@ -84,7 +207,12 @@ class TestRiskScore:
 
 class TestDatabase:
     def test_save_and_get_session(self, temp_db):
-        session = Session(id="test-123", peak_risk_score=45.5, total_tool_calls=10, outcome=SessionOutcome.COMPLETED)
+        session = Session(
+            id="test-123",
+            peak_risk_score=45.5,
+            total_tool_calls=10,
+            outcome=SessionOutcome.COMPLETED,
+        )
         temp_db.save_session(session)
         retrieved = temp_db.get_session("test-123")
         assert retrieved is not None
@@ -95,7 +223,12 @@ class TestDatabase:
     def test_save_session_preserves_session_state(self, temp_db):
         """AC-1: save_session() must not clear session_state on updates."""
         session = Session(id="test-ac1")
-        state = {"tokens": 5000, "steps_since_confirm": 3, "tool_timestamps": [], "agent_spawn_timestamps": []}
+        state = {
+            "tokens": 5000,
+            "steps_since_confirm": 3,
+            "tool_timestamps": [],
+            "agent_spawn_timestamps": [],
+        }
         temp_db.save_session(session, session_state=state)
 
         # Update session without providing session_state
@@ -112,7 +245,12 @@ class TestDatabase:
     def test_save_session_state_roundtrip(self, temp_db):
         session = Session(id="test-rt")
         temp_db.save_session(session)
-        state = {"tokens": 10000, "steps_since_confirm": 5, "tool_timestamps": ["2026-01-01T00:00:00+00:00"], "agent_spawn_timestamps": []}
+        state = {
+            "tokens": 10000,
+            "steps_since_confirm": 5,
+            "tool_timestamps": ["2026-01-01T00:00:00+00:00"],
+            "agent_spawn_timestamps": [],
+        }
         temp_db.save_session_state("test-rt", state)
         loaded = temp_db.load_session_state("test-rt")
         assert loaded == state
@@ -150,7 +288,9 @@ class TestDatabase:
         assert stats["high_risk_sessions"] == 3
 
     def test_purge_old_sessions(self, temp_db):
-        old_session = Session(id="old-session", started_at=datetime.now(timezone.utc) - timedelta(days=100))
+        old_session = Session(
+            id="old-session", started_at=datetime.now(timezone.utc) - timedelta(days=100)
+        )
         new_session = Session(id="new-session")
         temp_db.save_session(old_session)
         temp_db.save_session(new_session)
@@ -163,6 +303,7 @@ class TestDatabase:
     def test_schema_includes_all_columns(self, temp_db):
         """Gap 25: SCHEMA should include session_state and project_dir."""
         import sqlite3
+
         conn = sqlite3.connect(temp_db.db_path)
         cursor = conn.execute("PRAGMA table_info(sessions)")
         columns = {row[1] for row in cursor.fetchall()}
@@ -172,7 +313,9 @@ class TestDatabase:
 
     def test_find_active_session(self, temp_db):
         """H2: fallback session lookup by project_dir."""
-        session = Session(id="active-1", project_dir="/test/project", outcome=SessionOutcome.IN_PROGRESS)
+        session = Session(
+            id="active-1", project_dir="/test/project", outcome=SessionOutcome.IN_PROGRESS
+        )
         temp_db.save_session(session)
         found = temp_db.find_active_session("/test/project")
         assert found is not None
@@ -181,8 +324,17 @@ class TestDatabase:
     def test_save_and_get_events(self, temp_db):
         session = Session(id="test-events")
         temp_db.save_session(session)
-        score = RiskScore.calculate(tokens=5000, active_agents=2, steps_since_confirm=3, tools_per_minute=5.0)
-        event = RiskEvent(session_id="test-events", event_type=EventType.TOOL_CALL, tool_name="Read", context_tokens=5000, risk_score=score, metadata={"file": "test.py"})
+        score = RiskScore.calculate(
+            tokens=5000, active_agents=2, steps_since_confirm=3, tools_per_minute=5.0
+        )
+        event = RiskEvent(
+            session_id="test-events",
+            event_type=EventType.TOOL_CALL,
+            tool_name="Read",
+            context_tokens=5000,
+            risk_score=score,
+            metadata={"file": "test.py"},
+        )
         event_id = temp_db.save_event(event)
         assert event_id > 0
         events = list(temp_db.get_session_events("test-events"))
@@ -210,7 +362,9 @@ class TestRiskEngine:
         session = Session(id="test-session")
         engine.start_session(session)
         for i in range(5):
-            event = RiskEvent(session_id="test-session", event_type=EventType.TOOL_CALL, tool_name=f"Tool{i}")
+            event = RiskEvent(
+                session_id="test-session", event_type=EventType.TOOL_CALL, tool_name=f"Tool{i}"
+            )
             engine.process_event(event)
         state = engine.get_session_state("test-session")
         assert state.steps_since_confirm == 5
@@ -221,7 +375,9 @@ class TestRiskEngine:
         session = Session(id="test-session")
         engine.start_session(session)
         for i in range(3):
-            event = RiskEvent(session_id="test-session", event_type=EventType.AGENT_SPAWN, tool_name="Task")
+            event = RiskEvent(
+                session_id="test-session", event_type=EventType.AGENT_SPAWN, tool_name="Task"
+            )
             engine.process_event(event)
         score = engine.get_current_score("test-session")
         assert score.agent_fanout == 0.6
@@ -233,7 +389,9 @@ class TestRiskEngine:
         session = Session(id="test-session")
         engine.start_session(session)
         for i in range(5):
-            event = RiskEvent(session_id="test-session", event_type=EventType.TOOL_CALL, tool_name=f"Tool{i}")
+            event = RiskEvent(
+                session_id="test-session", event_type=EventType.TOOL_CALL, tool_name=f"Tool{i}"
+            )
             engine.process_event(event)
         mid_score = engine.get_current_score("test-session")
         assert mid_score.autonomy_depth > 0
@@ -255,6 +413,38 @@ class TestRiskEngine:
         assert restored.steps_since_confirm == 3
         assert len(restored.tool_calls_timestamps) == 1
         assert len(restored.agent_spawn_timestamps) == 1
+
+    def test_session_state_displacement_fields_roundtrip(self):
+        session = Session(id="test-disp-rt")
+        state = SessionState(
+            session=session,
+            instruction_tokens=2500,
+            skill_tokens_injected=8000,
+            last_context_tokens=50000,
+        )
+        d = state.to_dict()
+        assert d["instruction_tokens"] == 2500
+        assert d["skill_tokens_injected"] == 8000
+        assert d["last_context_tokens"] == 50000
+
+        restored = SessionState.from_dict(d, session)
+        assert restored.instruction_tokens == 2500
+        assert restored.skill_tokens_injected == 8000
+        assert restored.last_context_tokens == 50000
+
+    def test_session_state_displacement_defaults_backward_compat(self):
+        """Legacy state dicts without displacement fields should deserialize safely."""
+        session = Session(id="test-legacy")
+        legacy_dict = {
+            "tokens": 3000,
+            "steps_since_confirm": 2,
+            "tool_timestamps": [],
+            "agent_spawn_timestamps": [],
+        }
+        restored = SessionState.from_dict(legacy_dict, session)
+        assert restored.instruction_tokens == 0
+        assert restored.skill_tokens_injected == 0
+        assert restored.last_context_tokens == 0
 
     def test_active_agents_decay_window(self):
         """AC-3 (partial): Agents older than decay window don't count."""
@@ -294,7 +484,9 @@ class TestRiskEngine:
         session = Session(id="test-peak")
         engine.start_session(session)
         for i in range(8):
-            event = RiskEvent(session_id="test-peak", event_type=EventType.TOOL_CALL, tool_name=f"Tool{i}")
+            event = RiskEvent(
+                session_id="test-peak", event_type=EventType.TOOL_CALL, tool_name=f"Tool{i}"
+            )
             engine.process_event(event)
         peak = engine.get_session("test-peak").peak_risk_score
         assert peak > 0
@@ -314,13 +506,17 @@ class TestRiskEngine:
 
     def test_threshold_callback(self):
         callback_fired = []
+
         def on_exceeded(session, score):
             callback_fired.append((session.id, score.total))
+
         engine = RiskEngine(threshold=20.0, on_threshold_exceeded=on_exceeded)
         session = Session(id="test-cb")
         engine.start_session(session)
         for i in range(5):
-            event = RiskEvent(session_id="test-cb", event_type=EventType.AGENT_SPAWN, tool_name="Task")
+            event = RiskEvent(
+                session_id="test-cb", event_type=EventType.AGENT_SPAWN, tool_name="Task"
+            )
             engine.process_event(event)
         assert len(callback_fired) > 0
 
@@ -331,8 +527,8 @@ class TestRiskEngine:
 class TestConfig:
     def test_load_settings_defaults(self):
         import os
+
         # Clear relevant env vars
-        env_clean = {k: v for k, v in os.environ.items() if not k.startswith("RTFI_")}
         with pytest.MonkeyPatch.context() as mp:
             for k in list(os.environ):
                 if k.startswith("RTFI_"):
@@ -369,6 +565,22 @@ class TestConfig:
 
 
 # ── Risk Level Tests ─────────────────────────────────────────────────────
+
+
+class TestEstimateTokens:
+    def test_basic_estimation(self):
+        assert estimate_tokens("a" * 400) == 100
+
+    def test_empty_string_returns_one(self):
+        assert estimate_tokens("") == 1
+
+    def test_short_string(self):
+        assert estimate_tokens("hi") == 1
+
+    def test_realistic_claude_md(self):
+        text = "x" * 10000  # ~10KB CLAUDE.md
+        tokens = estimate_tokens(text)
+        assert 2000 <= tokens <= 3000
 
 
 class TestRiskLevel:

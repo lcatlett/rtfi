@@ -19,6 +19,19 @@ RTFI calculates a real-time **Compliance Risk Score** based on measurable sessio
 
 When the score exceeds your threshold (default: 70), RTFI alerts you before failures occur.
 
+## Prerequisites
+
+- **Python >= 3.10** (3.14 pinned via `.mise.toml`)
+- **[mise](https://mise.jdx.dev/)** (recommended) — automatically activates the correct Python when you `cd` into the project
+
+No third-party dependencies — RTFI uses Python stdlib only.
+
+If you use mise, Python is set up automatically:
+
+```bash
+mise install   # installs Python 3.14 if not already present
+```
+
 ## Installation
 
 ### Quick Start
@@ -28,31 +41,16 @@ When the score exceeds your threshold (default: 70), RTFI alerts you before fail
 git clone https://github.com/lcatlett/rtfi.git
 cd rtfi
 
-# Run setup
+# Run setup (validates environment, initializes config and database)
 bash scripts/setup.sh
 ```
 
-### Install Dependencies
-
-Using [uv](https://docs.astral.sh/uv/) (recommended):
-
-```bash
-uv pip install --system "pydantic>=2.0.0"
-```
-
-Using pip:
-
-```bash
-pip3 install "pydantic>=2.0.0"
-```
-
-### First-Run Setup
-
-After installing dependencies, run the setup wizard to validate your environment and create the default config:
-
-```bash
-python3 scripts/rtfi_cli.py setup
-```
+The setup script will:
+1. Activate mise-managed Python if available
+2. Verify Python >= 3.10
+3. Create `~/.rtfi/` directory with correct permissions
+4. Generate default `~/.rtfi/config.env`
+5. Initialize the SQLite database
 
 ## Commands
 

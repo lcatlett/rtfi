@@ -9,13 +9,6 @@ from pathlib import Path
 script_dir = Path(__file__).parent
 sys.path.insert(0, str(script_dir))
 
-# Check dependencies (no auto-install — H5)
-try:
-    import pydantic  # noqa: F401
-except ImportError:
-    print("Error: Missing dependency 'pydantic'. Run: uv pip install pydantic>=2.0.0 (or pip3 install pydantic>=2.0.0)")
-    sys.exit(1)
-
 from rtfi_core import Database, load_settings, risk_level
 
 
@@ -28,7 +21,9 @@ def cmd_sessions(args):
         print("No sessions recorded yet.")
         return
 
-    print(f"\n{'ID':<12} {'Started':<16} {'Peak Risk':>10} {'Tools':>6} {'Agents':>7} {'Outcome':<12}")
+    print(
+        f"\n{'ID':<12} {'Started':<16} {'Peak Risk':>10} {'Tools':>6} {'Agents':>7} {'Outcome':<12}"
+    )
     print("-" * 70)
 
     for s in sessions:
@@ -40,7 +35,7 @@ def cmd_sessions(args):
             risk_indicator = " (*)"
 
         print(
-            f"{s.id[:8]+'...':<12} "
+            f"{s.id[:8] + '...':<12} "
             f"{s.started_at.strftime('%Y-%m-%d %H:%M'):<16} "
             f"{s.peak_risk_score:>9.1f}{risk_indicator} "
             f"{s.total_tool_calls:>6} "
@@ -68,7 +63,7 @@ def cmd_risky(args):
 
     for s in sessions:
         print(
-            f"{s.id[:8]+'...':<12} "
+            f"{s.id[:8] + '...':<12} "
             f"{s.started_at.strftime('%Y-%m-%d %H:%M'):<16} "
             f"{s.peak_risk_score:>10.1f} "
             f"{s.total_tool_calls:>6} "
@@ -120,7 +115,6 @@ def cmd_show(args):
 
 def cmd_checkpoint(args: argparse.Namespace) -> None:
     """Reset autonomy depth for current session (manual checkpoint)."""
-    import json
     import os
     from pathlib import Path
 
@@ -144,7 +138,6 @@ def cmd_checkpoint(args: argparse.Namespace) -> None:
     db.save_session_state(session_id, state_dict)
 
     from rtfi_core import EventType, RiskEvent
-    from datetime import datetime, timezone
 
     event = RiskEvent(
         session_id=session_id,
@@ -175,7 +168,6 @@ def cmd_status(args: argparse.Namespace) -> None:
 
 def cmd_setup(args):
     """First-run setup wizard (L5)."""
-    import os
 
     print("\nRTFI Setup")
     print("=" * 50)
@@ -190,16 +182,7 @@ def cmd_setup(args):
         errors.append(f"Python >= 3.10 required, found {v.major}.{v.minor}")
         print(f"[ERROR] Python {v.major}.{v.minor} — requires >= 3.10")
 
-    # 2. Check pydantic
-    try:
-        import pydantic
-        print(f"[OK] pydantic {pydantic.__version__}")
-    except ImportError:
-        errors.append("pydantic not installed")
-        print("[ERROR] pydantic not installed")
-        print("        Run: uv pip install pydantic>=2.0.0 (or pip3 install pydantic>=2.0.0)")
-
-    # 3. Create ~/.rtfi/ with correct permissions
+    # 2. Create ~/.rtfi/ with correct permissions
     rtfi_dir = Path.home() / ".rtfi"
     rtfi_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     print(f"[OK] Directory: {rtfi_dir}")
@@ -268,15 +251,6 @@ def cmd_health(args):
 
     errors = []
 
-    # Check dependencies
-    try:
-        import pydantic
-
-        print(f"[OK] pydantic {pydantic.__version__}")
-    except ImportError:
-        errors.append("pydantic not installed")
-        print("[ERROR] pydantic not installed")
-
     # Check database
     try:
         db = Database()
@@ -307,7 +281,7 @@ def cmd_health(args):
     action_mode = os.environ.get("RTFI_ACTION_MODE", "alert (default)")
     retention = os.environ.get("RTFI_RETENTION_DAYS", "90 (default)")
 
-    print(f"\nSettings:")
+    print("\nSettings:")
     print(f"  Threshold: {threshold}")
     print(f"  Action Mode: {action_mode}")
     print(f"  Retention Days: {retention}")
@@ -317,7 +291,7 @@ def cmd_health(args):
         print(f"\n[FAIL] Health check failed with {len(errors)} error(s)")
         return 1
     else:
-        print(f"\n[PASS] All systems operational")
+        print("\n[PASS] All systems operational")
         return 0
 
 
@@ -328,15 +302,17 @@ def main():
     # sessions command
     sessions_parser = subparsers.add_parser("sessions", help="List recent sessions")
     sessions_parser.add_argument("--limit", "-n", type=int, default=20)
-    sessions_parser.add_argument("--project", "-p", type=str, default=None,
-                                 help="Filter by project directory")
+    sessions_parser.add_argument(
+        "--project", "-p", type=str, default=None, help="Filter by project directory"
+    )
 
     # risky command
     risky_parser = subparsers.add_parser("risky", help="Show high-risk sessions")
     risky_parser.add_argument("--threshold", "-t", type=float, default=70.0)
     risky_parser.add_argument("--limit", "-n", type=int, default=20)
-    risky_parser.add_argument("--project", "-p", type=str, default=None,
-                              help="Filter by project directory")
+    risky_parser.add_argument(
+        "--project", "-p", type=str, default=None, help="Filter by project directory"
+    )
 
     # show command
     show_parser = subparsers.add_parser("show", help="Show session details")

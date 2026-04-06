@@ -56,3 +56,4 @@ htmlcov/
 # RTFI data (local only)
 *.db
 .dual-graph/
+.gstack/

@@ -1,81 +1,51 @@
-<!-- dgc-policy-v10 -->
-# Dual-Graph Context Policy
+# RTFI
 
-This project uses a local dual-graph MCP server for efficient context retrieval.
+Real-Time Instruction Compliance Risk Scoring — a Claude Code plugin that scores sessions for the risk of ignoring standing instructions, so operators can intervene before failures compound.
 
-## MANDATORY: Always follow this order
+## Environment
 
-1. **Call `graph_continue` first** — before any file exploration, grep, or code reading.
+- **Python 3.14** pinned via `.mise.toml`. Run `mise install` to provision. Python stdlib only — no third-party runtime dependencies.
+- **Dev tools** (pytest, mypy, ruff) installed via `make dev`.
+- **Data home**: `~/.rtfi/` (SQLite at `~/.rtfi/rtfi.db`, config at `~/.rtfi/config.env`, logs at `~/.rtfi/rtfi.log` + `~/.rtfi/audit.log`).
+- **Plugin manifest**: `.claude-plugin/plugin.json` (v1.2.0).
 
-2. **If `graph_continue` returns `needs_project=true`**: call `graph_scan` with the
-   current project directory (`pwd`). Do NOT ask the user.
+## Key Files
 
-3. **If `graph_continue` returns `skip=true`**: project has fewer than 5 files.
-   Do NOT do broad or recursive exploration. Read only specific files if their names
-   are mentioned, or ask the user what to work on.
+Read these first for any non-trivial task — they are the source of truth for current architecture:
 
-4. **Read `recommended_files`** using `graph_read` — **one call per file**.
-   - `graph_read` accepts a single `file` parameter (string). Call it separately for each
-     recommended file. Do NOT pass an array or batch multiple files into one call.
-   - `recommended_files` may contain `file::symbol` entries (e.g. `src/auth.ts::handleLogin`).
-     Pass them verbatim to `graph_read(file: "src/auth.ts::handleLogin")` — it reads only
-     that symbol's lines, not the full file.
-   - Example: if `recommended_files` is `["src/auth.ts::handleLogin", "src/db.ts"]`,
-     call `graph_read(file: "src/auth.ts::handleLogin")` and `graph_read(file: "src/db.ts")`
-     as two separate calls (they can be parallel).
-
-5. **Check `confidence` and obey the caps strictly:**
-   - `confidence=high` -> Stop. Do NOT grep or explore further.
-   - `confidence=medium` -> If recommended files are insufficient, call `fallback_rg`
-     at most `max_supplementary_greps` time(s) with specific terms, then `graph_read`
-     at most `max_supplementary_files` additional file(s). Then stop.
-   - `confidence=low` -> Call `fallback_rg` at most `max_supplementary_greps` time(s),
-     then `graph_read` at most `max_supplementary_files` file(s). Then stop.
-
-## Token Usage
-
-A `token-counter` MCP is available for tracking live token usage.
-
-- To check how many tokens a large file or text will cost **before** reading it:
-  `count_tokens({text: "<content>"})`
-- To log actual usage after a task completes (if the user asks):
-  `log_usage({input_tokens: <est>, output_tokens: <est>, description: "<task>"})`
-- To show the user their running session cost:
-  `get_session_stats()`
-
-Live dashboard URL is printed at startup next to "Token usage".
+- `scripts/rtfi_core.py` — consolidated core: `SessionState` dataclass, `RiskScore.calculate()` (5-factor formula), SQLite schema and persistence.
+- `scripts/hook_handler.py` — PreToolUse / PostToolUse / SessionStart / Stop hook dispatch; Skill-tool displacement tracking lives here.
+- `scripts/rtfi_dashboard.py` + `scripts/dashboard.html` — stdlib HTTP server + Chart.js single-page app.
+- `scripts/rtfi_cli.py` — CLI entrypoint (setup, health, status, etc.).
+- `scripts/demo_scenario.py` / `scripts/demo_compliance_check.py` — live demo driver and per-constraint validator.
+- `tests/` — `test_core.py`, `test_hook_handler.py`, `test_dashboard.py`, `test_integration.py`. Follow existing patterns for new tests (see `test_backward_compat_*` for dataclass-field additions).
+- `docs/ARCHITECTURE.md`, `docs/CASE_STUDY.md`, `docs/PRODUCT-BRIEF.md` — design context. `CHANGELOG.md` for version history.
+- `CONTEXT.md` — short living session-handoff doc (see Session End below).
+- `commands/`, `skills/`, `hooks/`, `agents/` — plugin surface area users invoke.
 
 ## Rules
 
-- Do NOT use `rg`, `grep`, or bash file exploration before calling `graph_continue`.
-- Do NOT do broad/recursive exploration at any confidence level.
-- `max_supplementary_greps` and `max_supplementary_files` are hard caps - never exceed them.
-- Do NOT dump full chat history.
-- Do NOT call `graph_retrieve` more than once per turn.
-- After edits, call `graph_register_edit` with the changed files. Use `file::symbol` notation (e.g. `src/auth.ts::handleLogin`) when the edit targets a specific function, class, or hook.
+1. **Stdlib only at runtime.** Do not add third-party runtime dependencies. Dev-only tools (pytest/mypy/ruff) go under `[project.optional-dependencies]` in `pyproject.toml`.
+2. **Prefer extending `rtfi_core.py` and existing hook handlers** over creating new modules. v1.2.0 deliberately consolidated 7+ modules into one — don't re-fragment it.
+3. **Backward-compat fields.** New `SessionState` fields must use `field(default_factory=...)` so older DB rows deserialize cleanly. Cover with a `test_backward_compat_*` test.
+4. **Do not modify the 5-factor scoring weights or formula** without an explicit change request. New signals become derived metrics or new fields, not new scoring factors.
+5. **Run tests, lint, and typecheck before declaring done:** `make test && make lint && make typecheck`.
+6. **Config precedence** (highest wins): env vars → `~/.rtfi/config.env` → `.claude/rtfi.local.md` → built-in defaults. Respect this order when adding new settings.
+7. **Never edit** `.claude/rtfi.local.md` or files under `~/.rtfi/` from code as part of a feature — those are user state.
+8. **Commits**: no Co-Authored-By trailers; follow existing Conventional Commit style in `git log`.
 
-## Context Store
+## Active State
 
-Whenever you make a decision, identify a task, note a next step, fact, or blocker during a conversation, append it to `.dual-graph/context-store.json`.
+- **v1.2.0 shipped** (PR #1 merged). `docs/ARCHITECTURE.md` still references pre-consolidation module paths and needs a sweep.
+- **In progress**: instruction-displacement enforcement — extending the v1.2.0 displacement risk factor with a behavioral compliance layer (expected-vs-observed artifact tracking at session end). See `docs/CASE_STUDY.md`.
+- **Known nit**: `Makefile` `typecheck` target points at `scripts/rtfi/` (legacy path); actual code is `scripts/rtfi_core.py`. Fix when touching the Makefile.
 
-**Entry format:**
-```json
-{"type": "decision|task|next|fact|blocker", "content": "one sentence max 15 words", "tags": ["topic"], "files": ["relevant/file.ts"], "date": "YYYY-MM-DD"}
-```
+## Session End Protocol
 
-**To append:** Read the file → add the new entry to the array → Write it back → call `graph_register_edit` on `.dual-graph/context-store.json`.
+When the user signals they are done (e.g. "bye", "done", "wrap up", "end session"), update `CONTEXT.md` in the project root with:
 
-**Rules:**
-- Only log things worth remembering across sessions (not every minor detail)
-- `content` must be under 15 words
-- `files` lists the files this decision/task relates to (can be empty)
-- Log immediately when the item arises — not at session end
+- **Current Task** — one sentence on what was being worked on
+- **Key Decisions** — bullet list, max 3 items
+- **Next Steps** — bullet list, max 3 items
 
-## Session End
-
-When the user signals they are done (e.g. "bye", "done", "wrap up", "end session"), proactively update `CONTEXT.md` in the project root with:
-- **Current Task**: one sentence on what was being worked on
-- **Key Decisions**: bullet list, max 3 items
-- **Next Steps**: bullet list, max 3 items
-
-Keep `CONTEXT.md` under 20 lines total. Do NOT summarize the full conversation — only what's needed to resume next session.
+Keep `CONTEXT.md` under 20 lines total. Do not summarize the full conversation — only what's needed to resume next session.

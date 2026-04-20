@@ -12,12 +12,18 @@ RTFI calculates a real-time **Compliance Risk Score** based on measurable sessio
 
 | Factor | Weight | Rationale |
 |--------|--------|-----------|
-| Context length | 25% | Longer context → earlier instructions deprioritized |
+| Context length | 20% | Longer context → earlier instructions deprioritized |
 | Agent fanout | 30% | Parallel agents → highest risk factor |
 | Autonomy depth | 25% | Steps since human confirmation |
-| Decision velocity | 20% | Tool calls per minute |
+| Decision velocity | 15% | Tool calls per minute |
+| Instruction displacement | 10% | Skill prompts crowding CLAUDE.md (token ratio) |
 
 When the score exceeds your threshold (default: 70), RTFI alerts you before failures occur.
+
+On top of scoring, RTFI can also enforce **behavioral compliance**: configure
+expected artifacts (e.g. `CONTEXT.md`) via `RTFI_EXPECTED_ARTIFACTS` and the
+Stop hook will flag sessions that reached the end without writing them —
+turning displacement from a leading indicator into a confirmed pass/fail signal.
 
 ## Prerequisites
 
@@ -65,7 +71,7 @@ The setup script will:
 | `/rtfi:checkpoint` | Reset autonomy depth for the current session |
 | `/rtfi:dashboard` | Launch the web dashboard |
 | `/rtfi:demo` | Run a synthetic high-risk scenario against the live database |
-| `/rtfi:check` | Validate a session against declared constraints |
+| `/rtfi:check` | Validate a session against declared constraints and artifact compliance |
 
 ## Web Dashboard
 
@@ -82,10 +88,11 @@ python3 scripts/rtfi_dashboard.py --port 7430 --no-browser
 Open **http://localhost:7430**. The dashboard shows:
 
 - **Live risk gauge** — ring indicator that updates every 2 seconds during an active Claude session, color-coded green / amber / red
-- **Factor bars** — real-time breakdown of context length, agent fanout, autonomy depth, and decision velocity with weights
+- **Factor bars** — real-time breakdown of all 5 factors (context length, agent fanout, autonomy depth, decision velocity, instruction displacement) with weights
 - **5 analytics charts** — daily volume & risk trend, session outcomes, risk distribution, tool usage vs risk, risk factor radar
-- **Session history** — last 25 sessions, clickable rows with peak score badges
+- **Session history** — last 25 sessions, clickable rows with peak score badges and a Compliance column (PASS / FAIL / N/A) driven by expected-vs-observed artifacts
 - **Session detail** — full event timeline with per-event risk scores via modal drill-down
+- **JSON APIs** — `/api/sessions`, `/api/session/<id>`, `/api/stats`, `/api/chart-data`, `/api/live`, and `/api/compliance?threshold=0.7` (displacement × compliance correlation)
 
 Stop with `Ctrl+C`.
 
@@ -121,7 +128,7 @@ python3 scripts/demo_compliance_check.py --latest --constraints constraints.json
 
 Default constraints checked: max 2 parallel agents, confirm every 5 steps, 80k token context guard, risk threshold ≤ 70. All thresholds are configurable via JSON file.
 
-Output: per-constraint PASS / WARN / FAIL verdict, exact violation location (step number, tool, timestamp), score decomposition, and the verbatim `systemMessage` RTFI sent to Claude at threshold breach.
+Output: per-constraint PASS / WARN / FAIL verdict, exact violation location (step number, tool, timestamp), score decomposition, the verbatim `systemMessage` RTFI sent to Claude at threshold breach, and — if `RTFI_EXPECTED_ARTIFACTS` was configured for the session — an **Artifact Compliance** section listing which required files were and weren't written before session end.
 
 ## Configuration
 
@@ -164,17 +171,22 @@ max_tools_per_min=20.0
 | `RTFI_MAX_AGENTS` | `5` | Agent count normalization ceiling |
 | `RTFI_MAX_STEPS` | `10` | Autonomy depth normalization ceiling |
 | `RTFI_MAX_TOOLS_PER_MIN` | `20.0` | Decision velocity normalization ceiling |
+| `RTFI_INSTRUCTION_TOKENS` | *(auto)* | Override CLAUDE.md token baseline for displacement factor |
+| `RTFI_SYSTEM_PROMPT_TOKENS` | `2000` | Base system-prompt tokens added to the displacement baseline |
+| `RTFI_AGENT_DECAY_SECONDS` | `300` | Window during which a spawned agent counts toward fanout |
+| `RTFI_EXPECTED_ARTIFACTS` | *(unset)* | Colon-separated file paths that must be written before session end; unset = enforcement off |
 | `RTFI_STATSD_HOST` | *(unset)* | Enable StatsD metrics export |
 | `RTFI_STATSD_PORT` | `8125` | StatsD UDP port |
 
 ## How It Works
 
 1. **Hooks track session activity** - Every tool call, agent spawn, and response
-2. **Risk score calculated in real-time** - Deterministic formula, no LLM needed
+2. **Risk score calculated in real-time** - Deterministic 5-factor formula, no LLM needed
 3. **Alerts fire at threshold** - Warning appears in session
-4. **Session data logged** - SQLite database at `~/.rtfi/rtfi.db`
-5. **Structured JSON logs** - Parseable by `jq`, Datadog, Splunk at `~/.rtfi/rtfi.log`
-6. **Tamper-evident audit trail** - HMAC-signed entries at `~/.rtfi/audit.log`
+4. **Stop hook checks artifact compliance** - If `RTFI_EXPECTED_ARTIFACTS` is set, the hook diffs expected vs. observed `Write`/`Edit`/`NotebookEdit` paths and flags sessions that finished without producing them
+5. **Session data logged** - SQLite database at `~/.rtfi/rtfi.db`
+6. **Structured JSON logs** - Parseable by `jq`, Datadog, Splunk at `~/.rtfi/rtfi.log`
+7. **Tamper-evident audit trail** - HMAC-signed entries at `~/.rtfi/audit.log` (including `COMPLIANCE_VIOLATION` entries)
 
 ## Data Storage
 

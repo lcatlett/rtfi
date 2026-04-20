@@ -16,6 +16,7 @@ from rtfi_core import (
     SessionOutcome,
     SessionState,
     estimate_tokens,
+    get_expected_artifacts,
     load_settings,
     risk_level,
 )
@@ -310,6 +311,55 @@ class TestDatabase:
         conn.close()
         assert "session_state" in columns
         assert "project_dir" in columns
+        assert "compliance_violated" in columns
+
+    def test_compliance_violated_column_persists(self, temp_db):
+        """Session.compliance_violated must round-trip through save/get."""
+        session = Session(id="test-comp", compliance_violated=True)
+        temp_db.save_session(session)
+        loaded = temp_db.get_session("test-comp")
+        assert loaded is not None
+        assert loaded.compliance_violated is True
+
+        clean = Session(id="test-clean", compliance_violated=False)
+        temp_db.save_session(clean)
+        loaded_clean = temp_db.get_session("test-clean")
+        assert loaded_clean.compliance_violated is False
+
+    def test_migration_adds_compliance_column_to_legacy_db(self, tmp_path):
+        """Opening a DB that predates the compliance column should upgrade it."""
+        import sqlite3
+
+        db_path = tmp_path / "legacy.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                instruction_source TEXT,
+                instruction_hash TEXT,
+                final_risk_score REAL,
+                peak_risk_score REAL DEFAULT 0,
+                total_tool_calls INTEGER DEFAULT 0,
+                total_agent_spawns INTEGER DEFAULT 0,
+                outcome TEXT DEFAULT 'in_progress'
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO sessions (id, started_at, outcome) VALUES (?, ?, ?)",
+            ("legacy-1", "2026-01-01T00:00:00+00:00", "completed"),
+        )
+        conn.commit()
+        conn.close()
+
+        db = Database(db_path=db_path)
+        loaded = db.get_session("legacy-1")
+        assert loaded is not None
+        assert loaded.compliance_violated is False  # Default for pre-existing row
+        db.close()
 
     def test_find_active_session(self, temp_db):
         """H2: fallback session lookup by project_dir."""
@@ -446,6 +496,39 @@ class TestRiskEngine:
         assert restored.skill_tokens_injected == 0
         assert restored.last_context_tokens == 0
 
+    def test_backward_compat_missing_artifact_fields(self):
+        """Legacy state dicts without artifact fields should deserialize to empty lists."""
+        session = Session(id="test-artifact-legacy")
+        legacy_dict = {
+            "tokens": 3000,
+            "steps_since_confirm": 2,
+            "tool_timestamps": [],
+            "agent_spawn_timestamps": [],
+        }
+        restored = SessionState.from_dict(legacy_dict, session)
+        assert restored.expected_artifacts == []
+        assert restored.observed_artifacts == []
+        assert restored.compliance_failures == []
+
+    def test_session_state_artifact_fields_roundtrip(self):
+        """Round-trip non-empty artifact lists through to_dict/from_dict."""
+        session = Session(id="test-artifact-rt")
+        state = SessionState(
+            session=session,
+            expected_artifacts=["/proj/CONTEXT.md", "/proj/CHANGELOG.md"],
+            observed_artifacts=["/proj/CONTEXT.md"],
+            compliance_failures=["/proj/CHANGELOG.md"],
+        )
+        d = state.to_dict()
+        assert d["expected_artifacts"] == ["/proj/CONTEXT.md", "/proj/CHANGELOG.md"]
+        assert d["observed_artifacts"] == ["/proj/CONTEXT.md"]
+        assert d["compliance_failures"] == ["/proj/CHANGELOG.md"]
+
+        restored = SessionState.from_dict(d, session)
+        assert restored.expected_artifacts == ["/proj/CONTEXT.md", "/proj/CHANGELOG.md"]
+        assert restored.observed_artifacts == ["/proj/CONTEXT.md"]
+        assert restored.compliance_failures == ["/proj/CHANGELOG.md"]
+
     def test_active_agents_decay_window(self):
         """AC-3 (partial): Agents older than decay window don't count."""
         session = Session(id="test-decay")
@@ -562,6 +645,35 @@ class TestConfig:
             mp.setenv("RTFI_AGENT_DECAY_SECONDS", "120")
             settings = load_settings(log_dir=Path(tempfile.mkdtemp()))
         assert settings["agent_decay_seconds"] == 120
+
+    def test_get_expected_artifacts_unset_is_empty(self, tmp_path):
+        """Unset RTFI_EXPECTED_ARTIFACTS disables enforcement (empty list)."""
+        with pytest.MonkeyPatch.context() as mp:
+            mp.delenv("RTFI_EXPECTED_ARTIFACTS", raising=False)
+            assert get_expected_artifacts(tmp_path) == []
+
+    def test_get_expected_artifacts_resolves_relative_paths(self, tmp_path):
+        """Relative entries resolve against project_dir; multiple entries split on ':'."""
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("RTFI_EXPECTED_ARTIFACTS", "CONTEXT.md:docs/CHANGELOG.md")
+            paths = get_expected_artifacts(tmp_path)
+        assert len(paths) == 2
+        assert paths[0] == str((tmp_path / "CONTEXT.md").resolve())
+        assert paths[1] == str((tmp_path / "docs" / "CHANGELOG.md").resolve())
+
+    def test_get_expected_artifacts_absolute_path_preserved(self, tmp_path):
+        """Absolute entries stay absolute."""
+        abs_path = str(tmp_path / "CONTEXT.md")
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("RTFI_EXPECTED_ARTIFACTS", abs_path)
+            paths = get_expected_artifacts(tmp_path)
+        assert paths == [abs_path]
+
+    def test_get_expected_artifacts_empty_string_disables(self, tmp_path):
+        """Empty env var string → empty list (explicit opt-out)."""
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("RTFI_EXPECTED_ARTIFACTS", "")
+            assert get_expected_artifacts(tmp_path) == []
 
 
 # ── Risk Level Tests ─────────────────────────────────────────────────────

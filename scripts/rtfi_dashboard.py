@@ -56,14 +56,29 @@ def _json_serial(obj):
     raise TypeError(f"Type {type(obj)} not serializable")
 
 
-def _session_to_dict(session, stale_hours: int = 2) -> dict:
-    """Convert a Session model to a JSON-safe dict."""
+def _session_to_dict(session, stale_hours: int = 2, db: Database | None = None) -> dict:
+    """Convert a Session model to a JSON-safe dict.
+
+    If ``db`` is provided, pulls expected_artifacts / compliance_failures from
+    session_state JSON so the dashboard can render the compliance column.
+    """
     outcome = session.outcome.value
     # Mark stale in-progress sessions as abandoned
     if outcome == "in_progress" and session.started_at:
         elapsed = datetime.now(timezone.utc) - session.started_at
         if elapsed > timedelta(hours=stale_hours):
             outcome = "abandoned"
+
+    expected_artifacts: list = []
+    compliance_failures: list = []
+    if db is not None:
+        try:
+            state_dict = db.load_session_state(session.id)
+        except Exception:
+            state_dict = None
+        if state_dict:
+            expected_artifacts = state_dict.get("expected_artifacts", []) or []
+            compliance_failures = state_dict.get("compliance_failures", []) or []
 
     return {
         "id": session.id,
@@ -74,6 +89,9 @@ def _session_to_dict(session, stale_hours: int = 2) -> dict:
         "total_agent_spawns": session.total_agent_spawns,
         "outcome": outcome,
         "project_dir": session.project_dir,
+        "compliance_violated": bool(getattr(session, "compliance_violated", False)),
+        "expected_artifacts": expected_artifacts,
+        "compliance_failures": compliance_failures,
     }
 
 
@@ -188,7 +206,7 @@ def api_sessions(db: Database, params: dict) -> dict:
     page = all_sessions[offset : offset + limit]
 
     stale_hours = int(_settings.get("stale_session_hours", STALE_SESSION_HOURS))
-    sessions = [_session_to_dict(s, stale_hours) for s in page]
+    sessions = [_session_to_dict(s, stale_hours, db=db) for s in page]
 
     return {"sessions": sessions, "total": total}
 
@@ -208,7 +226,7 @@ def api_session_detail(db: Database, session_id: str) -> dict:
     state_dict = db.load_session_state(session.id)
 
     return {
-        "session": _session_to_dict(session, stale_hours),
+        "session": _session_to_dict(session, stale_hours, db=db),
         "events": [_event_to_dict(e) for e in events],
         "state": state_dict,
     }
@@ -224,6 +242,53 @@ def api_stats(db: Database) -> dict:
         "total_tool_calls": stats["total_tool_calls"],
         "total_agent_spawns": stats["total_agent_spawns"],
         "avg_risk_score": stats["avg_risk_score"],
+    }
+
+
+def api_compliance(db: Database, params: dict) -> dict:
+    """GET /api/compliance?threshold=0.7
+
+    Correlation between high instruction-displacement and compliance failures.
+    Displacement for a session is the max `instruction_displacement` factor
+    across its risk_events. Returns None for ratio when denominator is 0.
+    """
+    try:
+        disp_threshold = float(params.get("threshold", ["0.7"])[0])
+    except (ValueError, TypeError):
+        disp_threshold = 0.7
+
+    conn = db._connect()
+    rows = conn.execute(
+        """SELECT s.id, s.compliance_violated, e.risk_score_factors
+        FROM sessions s
+        LEFT JOIN risk_events e ON e.session_id = s.id
+        """
+    ).fetchall()
+
+    per_session: dict[str, dict] = {}
+    for sid, violated, factors_json in rows:
+        slot = per_session.setdefault(
+            sid, {"violated": bool(violated or 0), "max_disp": 0.0}
+        )
+        if factors_json:
+            try:
+                factors = json.loads(factors_json)
+                disp = float(factors.get("instruction_displacement", 0.0) or 0.0)
+                if disp > slot["max_disp"]:
+                    slot["max_disp"] = disp
+            except (ValueError, TypeError):
+                continue
+
+    high_disp = [s for s in per_session.values() if s["max_disp"] >= disp_threshold]
+    denom = len(high_disp)
+    failures = sum(1 for s in high_disp if s["violated"])
+    ratio = (failures / denom) if denom > 0 else None
+
+    return {
+        "displacement_threshold": disp_threshold,
+        "high_displacement_sessions": denom,
+        "compliance_failures_among_high_displacement": failures,
+        "ratio": ratio,
     }
 
 
@@ -362,6 +427,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         return
             elif path == "/api/stats":
                 data = api_stats(db)
+            elif path == "/api/compliance":
+                data = api_compliance(db, params)
             elif path == "/api/chart-data":
                 data = api_chart_data(db, params)
             else:

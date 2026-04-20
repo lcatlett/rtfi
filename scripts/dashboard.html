@@ -328,10 +328,11 @@ tbody tr:hover { background: #F8FAFC; }
               <th data-sort="total_tool_calls" style="text-align:right">Tools <span class="sort-arrow">&#9650;</span></th>
               <th data-sort="total_agent_spawns" style="text-align:right">Agents <span class="sort-arrow">&#9650;</span></th>
               <th data-sort="outcome">Outcome <span class="sort-arrow">&#9650;</span></th>
+              <th data-sort="compliance_violated">Compliance <span class="sort-arrow">&#9650;</span></th>
             </tr>
           </thead>
           <tbody id="sessions-body">
-            <tr><td colspan="6" class="empty">Loading sessions...</td></tr>
+            <tr><td colspan="7" class="empty">Loading sessions...</td></tr>
           </tbody>
         </table>
       </div>
@@ -704,7 +705,7 @@ function sortSessions() {
 
     const tbody = document.getElementById('sessions-body');
     if (sorted.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty">No sessions recorded yet</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty">No sessions recorded yet</td></tr>';
         return;
     }
     const threshold = CFG.threshold || 70;
@@ -715,6 +716,21 @@ function sortSessions() {
         const score = s.peak_risk_score.toFixed(1);
         const outcomeClass = s.outcome.replace(/ /g, '_');
         const outcomeLabel = s.outcome.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+        const expected = Array.isArray(s.expected_artifacts) ? s.expected_artifacts : [];
+        const failures = Array.isArray(s.compliance_failures) ? s.compliance_failures : [];
+        let complianceCell;
+        if (expected.length === 0) {
+            complianceCell = '<td style="color:var(--slate-light)">N/A</td>';
+        } else if (s.compliance_violated) {
+            const missing = failures.map(p => p.split('/').pop()).join(', ');
+            const title = 'Missing: ' + failures.join(', ');
+            complianceCell = '<td><span class="badge hi" title="' +
+                title.replace(/"/g, '&quot;') + '">&#10007; ' + missing + '</span></td>';
+        } else {
+            complianceCell = '<td><span class="badge lo">&#10003; PASS</span></td>';
+        }
+
         return '<tr data-sid="' + s.id + '">' +
             '<td style="font-family:\'SF Mono\',monospace;font-size:0.85em">' + sid + '</td>' +
             '<td style="color:var(--slate)">' + time + '</td>' +
@@ -722,6 +738,7 @@ function sortSessions() {
             '<td style="text-align:right;color:var(--text-2)">' + s.total_tool_calls + '</td>' +
             '<td style="text-align:right;color:var(--text-2)">' + s.total_agent_spawns + '</td>' +
             '<td><span class="obadge ' + outcomeClass + '">' + outcomeLabel + '</span></td>' +
+            complianceCell +
             '</tr>';
     }).join('');
 

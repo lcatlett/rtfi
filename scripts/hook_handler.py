@@ -78,9 +78,12 @@ from rtfi_core import (
     SessionOutcome,
     SessionState,
     estimate_tokens,
+    get_expected_artifacts,
     get_statsd,
     load_settings,
 )
+
+WRITE_TOOLS = {"Write", "Edit", "NotebookEdit", "MultiEdit"}
 
 # ── HMAC Audit Trail ────────────────────────────────────────────────────
 
@@ -191,6 +194,21 @@ def validate_hook_data(hook_data: Any) -> dict[str, Any]:
     session_id = hook_data.get("session_id")
     if isinstance(session_id, str) and len(session_id) < 128:
         validated["session_id"] = session_id
+
+    # Pass through file_path from nested tool_input or top-level (for Write/Edit
+    # compliance-artifact tracking). Bounded to avoid pathological inputs.
+    file_path: str | None = None
+    tool_input = hook_data.get("tool_input")
+    if isinstance(tool_input, dict):
+        candidate = tool_input.get("file_path") or tool_input.get("notebook_path")
+        if isinstance(candidate, str) and 0 < len(candidate) < 4096:
+            file_path = candidate
+    if file_path is None:
+        candidate = hook_data.get("file_path")
+        if isinstance(candidate, str) and 0 < len(candidate) < 4096:
+            file_path = candidate
+    if file_path is not None:
+        validated["file_path"] = file_path
 
     return validated
 
@@ -363,6 +381,7 @@ def handle_session_start(hook_data: dict[str, Any]) -> dict[str, Any]:
     state = engine.get_session_state(session_id)
     if state:
         state.instruction_tokens = _measure_instruction_tokens()
+        state.expected_artifacts = get_expected_artifacts(session.project_dir)
 
     db.save_session(session)
 
@@ -507,6 +526,22 @@ def handle_post_tool_use(hook_data: dict[str, Any]) -> dict[str, Any]:
 
         state.last_context_tokens = context_tokens
 
+        # Compliance-artifact tracking: record absolute paths Claude wrote/edited.
+        # Only meaningful when operator opted into enforcement via RTFI_EXPECTED_ARTIFACTS.
+        tool_name = validated.get("tool_name")
+        file_path = validated.get("file_path")
+        if tool_name in WRITE_TOOLS and file_path:
+            try:
+                candidate = Path(file_path)
+                if not candidate.is_absolute():
+                    base = state.session.project_dir or os.getcwd()
+                    candidate = Path(base) / candidate
+                resolved = str(candidate.resolve())
+                if resolved not in state.observed_artifacts:
+                    state.observed_artifacts.append(resolved)
+            except (OSError, ValueError) as e:
+                logger.debug(f"Could not resolve artifact path {file_path!r}: {e}")
+
     event = RiskEvent(
         session_id=session_id,
         event_type=EventType.RESPONSE,
@@ -531,6 +566,23 @@ def handle_stop(hook_data: dict[str, Any]) -> dict[str, Any]:
 
     # Hydrate session state from DB before ending
     _hydrate_session(session_id)
+
+    # Compliance diff: expected-vs-observed artifact tracking. Runs before
+    # persistence so the state snapshot captures compliance_failures, and the
+    # in-memory session gets compliance_violated for the subsequent save_session.
+    state = engine.get_session_state(session_id)
+    if state and state.expected_artifacts:
+        observed = set(state.observed_artifacts)
+        state.compliance_failures = [
+            p for p in state.expected_artifacts if p not in observed
+        ]
+        state.session.compliance_violated = bool(state.compliance_failures)
+        if state.compliance_failures:
+            log_audit(
+                "COMPLIANCE_VIOLATION",
+                session_id,
+                {"missing_artifacts": state.compliance_failures},
+            )
 
     # Persist final state snapshot BEFORE ending the session (AC-2)
     _persist_state(session_id)
@@ -596,6 +648,9 @@ def handle_stop(hook_data: dict[str, Any]) -> dict[str, Any]:
             f"RTFI: Session complete. Peak risk: {session.peak_risk_score:.1f}, "
             f"Tool calls: {session.total_tool_calls}, Agent spawns: {session.total_agent_spawns}"
         )
+        if session.compliance_violated:
+            missing_count = len(state.compliance_failures) if state else 0
+            summary += f", Compliance: FAIL ({missing_count} missing)"
 
         return {
             "decision": "approve",

@@ -289,6 +289,133 @@ class TestHandlers:
         score = engine.get_current_score(session_id)
         assert score.instruction_displacement == 1.0
 
+    def test_validate_hook_data_passes_through_file_path(self):
+        """validate_hook_data should surface file_path from nested tool_input."""
+        result = validate_hook_data(
+            {"tool_name": "Write", "tool_input": {"file_path": "/x/CONTEXT.md"}}
+        )
+        assert result["file_path"] == "/x/CONTEXT.md"
+
+        result2 = validate_hook_data({"tool_name": "Edit", "file_path": "/y/a.md"})
+        assert result2["file_path"] == "/y/a.md"
+
+    def test_post_tool_use_tracks_write_paths(self):
+        """PostToolUse Write/Edit should append absolute file paths to observed_artifacts."""
+        import tempfile
+
+        from hook_handler import engine
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": tmpdir}):
+                handle_session_start({})
+                session_id = os.environ.get("RTFI_SESSION_ID")
+
+                handle_post_tool_use(
+                    {"tool_name": "Write", "tool_input": {"file_path": "CONTEXT.md"}}
+                )
+                readme_path = str(Path(tmpdir) / "README.md")
+                foo_path = str(Path(tmpdir) / "foo.py")
+                handle_post_tool_use(
+                    {"tool_name": "Edit", "tool_input": {"file_path": readme_path}}
+                )
+                # Non-write tool should not be tracked
+                handle_post_tool_use(
+                    {"tool_name": "Read", "tool_input": {"file_path": foo_path}}
+                )
+
+                state = engine.get_session_state(session_id)
+                resolved_context = str((Path(tmpdir) / "CONTEXT.md").resolve())
+                resolved_readme = str((Path(tmpdir) / "README.md").resolve())
+                assert resolved_context in state.observed_artifacts
+                assert resolved_readme in state.observed_artifacts
+                assert all("foo.py" not in p for p in state.observed_artifacts)
+
+    def test_post_tool_use_deduplicates_artifact_paths(self):
+        """Writing the same file twice should record a single observed entry."""
+        import tempfile
+
+        from hook_handler import engine
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": tmpdir}):
+                handle_session_start({})
+                session_id = os.environ.get("RTFI_SESSION_ID")
+                for _ in range(3):
+                    handle_post_tool_use(
+                        {"tool_name": "Write", "tool_input": {"file_path": "CONTEXT.md"}}
+                    )
+                state = engine.get_session_state(session_id)
+                assert len(state.observed_artifacts) == 1
+
+    def test_stop_hook_flags_missing_artifact(self):
+        """Stop hook with unfulfilled expected_artifacts should set compliance_violated."""
+        import tempfile
+
+        from hook_handler import db
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                os.environ,
+                {"CLAUDE_PROJECT_DIR": tmpdir, "RTFI_EXPECTED_ARTIFACTS": "CONTEXT.md"},
+            ):
+                handle_session_start({})
+                session_id = os.environ.get("RTFI_SESSION_ID")
+                handle_pre_tool_use({"tool_name": "Read"})
+                handle_stop({})
+
+                loaded = db.get_session(session_id)
+                assert loaded is not None
+                assert loaded.compliance_violated is True
+
+                state_dict = db.load_session_state(session_id)
+                assert state_dict is not None
+                expected_path = str((Path(tmpdir) / "CONTEXT.md").resolve())
+                assert state_dict["compliance_failures"] == [expected_path]
+
+    def test_stop_hook_passes_when_artifact_written(self):
+        """Stop hook after a Write to the expected path → compliance_violated False."""
+        import tempfile
+
+        from hook_handler import db
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                os.environ,
+                {"CLAUDE_PROJECT_DIR": tmpdir, "RTFI_EXPECTED_ARTIFACTS": "CONTEXT.md"},
+            ):
+                handle_session_start({})
+                session_id = os.environ.get("RTFI_SESSION_ID")
+                handle_post_tool_use(
+                    {"tool_name": "Write", "tool_input": {"file_path": "CONTEXT.md"}}
+                )
+                handle_stop({})
+
+                loaded = db.get_session(session_id)
+                assert loaded.compliance_violated is False
+                state_dict = db.load_session_state(session_id)
+                assert state_dict["compliance_failures"] == []
+
+    def test_stop_hook_no_enforcement_when_env_unset(self):
+        """With no RTFI_EXPECTED_ARTIFACTS, compliance stays at False regardless of writes."""
+        import tempfile
+
+        from hook_handler import db
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = {"CLAUDE_PROJECT_DIR": tmpdir}
+            # Ensure env var is absent
+            with patch.dict(os.environ, env, clear=False):
+                os.environ.pop("RTFI_EXPECTED_ARTIFACTS", None)
+                handle_session_start({})
+                session_id = os.environ.get("RTFI_SESSION_ID")
+                handle_stop({})
+
+                loaded = db.get_session(session_id)
+                assert loaded.compliance_violated is False
+                state_dict = db.load_session_state(session_id)
+                assert state_dict.get("expected_artifacts", []) == []
+                assert state_dict.get("compliance_failures", []) == []
+
     def test_verify_audit_log_all_rotated(self):
         """AC-9: verify_audit_log with verify_all=True checks rotated files."""
         import tempfile

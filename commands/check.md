@@ -23,6 +23,9 @@ Read the output and summarize:
 - **Which constraints failed** and at which step
 - **Primary risk driver** from the score decomposition (whichever factor contributed the most points)
 - **What RTFI told Claude** at the threshold breach moment (the systemMessage)
+- **Artifact compliance** (PASS / FAIL / N/A): lists the expected-vs-missing artifacts
+  that RTFI's Stop hook checked for. Configure via `RTFI_EXPECTED_ARTIFACTS`
+  (colon-separated paths, relative to project dir). Default: disabled (N/A).
 
 If the user wants to adjust the constraints being checked, they can create a JSON file like:
 

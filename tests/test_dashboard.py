@@ -133,3 +133,24 @@ class TestDashboardAPI:
             content = resp.read().decode()
             assert "<!DOCTYPE html>" in content
             assert "chart.js" in content.lower() or "Chart" in content
+
+    def test_api_sessions_includes_compliance_fields(self, dashboard_server):
+        """/api/sessions must expose compliance_violated + compliance_failures."""
+        base_url, _ = dashboard_server
+        data = _get(f"{base_url}/api/sessions?limit=10")
+        assert data["sessions"], "expected at least one session"
+        row = data["sessions"][0]
+        assert "compliance_violated" in row
+        assert "expected_artifacts" in row
+        assert "compliance_failures" in row
+        assert isinstance(row["compliance_violated"], bool)
+
+    def test_api_compliance_endpoint(self, dashboard_server):
+        """/api/compliance returns displacement×compliance correlation metadata."""
+        base_url, _ = dashboard_server
+        data = _get(f"{base_url}/api/compliance?threshold=0.7")
+        assert "displacement_threshold" in data
+        assert "high_displacement_sessions" in data
+        assert "compliance_failures_among_high_displacement" in data
+        assert "ratio" in data  # May be None if denominator is 0
+        assert data["displacement_threshold"] == 0.7

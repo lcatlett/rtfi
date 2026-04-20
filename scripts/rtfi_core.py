@@ -34,6 +34,7 @@ __all__ = [
     "Database",
     # Config
     "load_settings",
+    "get_expected_artifacts",
     "DEFAULT_SETTINGS",
     # Metrics
     "get_statsd",
@@ -225,13 +226,14 @@ class Session:
     total_tool_calls: int = 0
     total_agent_spawns: int = 0
     project_dir: str | None = None
+    compliance_violated: bool = False
 
 
 # ── Database ─────────────────────────────────────────────────────────────
 
 DEFAULT_DB_PATH = Path(os.environ.get("RTFI_DB_PATH", str(Path.home() / ".rtfi" / "rtfi.db")))
 
-SCHEMA = """
+TABLE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     started_at TEXT NOT NULL,
@@ -244,7 +246,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     total_agent_spawns INTEGER DEFAULT 0,
     outcome TEXT DEFAULT 'in_progress',
     session_state TEXT,
-    project_dir TEXT
+    project_dir TEXT,
+    compliance_violated INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS risk_events (
@@ -260,7 +263,9 @@ CREATE TABLE IF NOT EXISTS risk_events (
     metadata TEXT,
     FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
+"""
 
+INDEX_SCHEMA = """
 CREATE INDEX IF NOT EXISTS idx_events_session ON risk_events(session_id);
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON risk_events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_sessions_outcome ON sessions(outcome);
@@ -303,9 +308,15 @@ class Database:
             self._conn_obj = None
 
     def _init_schema(self) -> None:
-        """Initialize database schema with migration support."""
+        """Initialize database schema with migration support.
+
+        Ordering matters: create/verify tables first, then run column migrations,
+        then create indices. Index DDL references columns added by migrations
+        (e.g. project_dir), so running indices before the ALTER TABLE would fail
+        against legacy databases that predate those columns.
+        """
         conn = self._connect()
-        conn.executescript(SCHEMA)
+        conn.executescript(TABLE_SCHEMA)
         conn.execute("PRAGMA foreign_keys = ON")
         # Migrations for existing databases that lack new columns
         cursor = conn.execute("PRAGMA table_info(sessions)")
@@ -314,6 +325,11 @@ class Database:
             conn.execute("ALTER TABLE sessions ADD COLUMN session_state TEXT")
         if "project_dir" not in columns:
             conn.execute("ALTER TABLE sessions ADD COLUMN project_dir TEXT")
+        if "compliance_violated" not in columns:
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN compliance_violated INTEGER DEFAULT 0"
+            )
+        conn.executescript(INDEX_SCHEMA)
         conn.commit()
 
     def save_session(self, session: Session, session_state: dict[str, Any] | None = None) -> None:
@@ -325,13 +341,16 @@ class Database:
         conn = self._connect()
         state_json = json.dumps(session_state) if session_state is not None else None
 
+        compliance_violated = 1 if getattr(session, "compliance_violated", False) else 0
+
         # Insert if new row
         conn.execute(
             """INSERT OR IGNORE INTO sessions
             (id, started_at, ended_at, instruction_source, instruction_hash,
              final_risk_score, peak_risk_score, total_tool_calls,
-             total_agent_spawns, outcome, project_dir, session_state)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             total_agent_spawns, outcome, project_dir, session_state,
+             compliance_violated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 session.id,
                 session.started_at.isoformat(),
@@ -345,6 +364,7 @@ class Database:
                 session.outcome.value,
                 getattr(session, "project_dir", None),
                 state_json,
+                compliance_violated,
             ),
         )
 
@@ -360,6 +380,7 @@ class Database:
             "total_agent_spawns=?",
             "outcome=?",
             "project_dir=?",
+            "compliance_violated=?",
         ]
         params: list[Any] = [
             session.started_at.isoformat(),
@@ -372,6 +393,7 @@ class Database:
             session.total_agent_spawns,
             session.outcome.value,
             getattr(session, "project_dir", None),
+            compliance_violated,
         ]
         if session_state is not None:
             cols.append("session_state=?")
@@ -569,6 +591,11 @@ class Database:
         except (IndexError, KeyError):
             project_dir = None
 
+        try:
+            compliance_violated = bool(row["compliance_violated"] or 0)
+        except (IndexError, KeyError):
+            compliance_violated = False
+
         return Session(
             id=row["id"],
             started_at=_parse_datetime(row["started_at"]),
@@ -581,6 +608,7 @@ class Database:
             total_agent_spawns=row["total_agent_spawns"] or 0,
             outcome=SessionOutcome(row["outcome"]),
             project_dir=project_dir,
+            compliance_violated=compliance_violated,
         )
 
     @staticmethod
@@ -627,6 +655,9 @@ class SessionState:
     skill_tokens_injected: int = 0
     pre_skill_tokens: int | None = None
     last_context_tokens: int = 0
+    expected_artifacts: list[str] = field(default_factory=list)
+    observed_artifacts: list[str] = field(default_factory=list)
+    compliance_failures: list[str] = field(default_factory=list)
 
     @property
     def active_agents(self) -> int:
@@ -670,6 +701,9 @@ class SessionState:
             "instruction_tokens": self.instruction_tokens,
             "skill_tokens_injected": self.skill_tokens_injected,
             "last_context_tokens": self.last_context_tokens,
+            "expected_artifacts": list(self.expected_artifacts),
+            "observed_artifacts": list(self.observed_artifacts),
+            "compliance_failures": list(self.compliance_failures),
         }
 
     @classmethod
@@ -717,6 +751,9 @@ class SessionState:
             instruction_tokens=data.get("instruction_tokens", 0),
             skill_tokens_injected=data.get("skill_tokens_injected", 0),
             last_context_tokens=data.get("last_context_tokens", 0),
+            expected_artifacts=list(data.get("expected_artifacts", [])),
+            observed_artifacts=list(data.get("observed_artifacts", [])),
+            compliance_failures=list(data.get("compliance_failures", [])),
         )
 
 
@@ -977,3 +1014,27 @@ def load_settings(log_dir: Path | None = None) -> dict[str, Any]:
 
     logger.info(f"Loaded settings: threshold={config['threshold']}, mode={config['action_mode']}")
     return config
+
+
+def get_expected_artifacts(project_dir: Path | str | None) -> list[str]:
+    """Return absolute paths of artifacts that must be written/updated before session end.
+
+    Controlled by RTFI_EXPECTED_ARTIFACTS (colon-separated, relative paths resolve
+    against project_dir). Unset → empty list (enforcement is opt-in). Set to empty
+    string also disables enforcement.
+    """
+    raw = os.environ.get("RTFI_EXPECTED_ARTIFACTS")
+    if raw is None or raw.strip() == "":
+        return []
+
+    base = Path(project_dir).resolve() if project_dir else Path.cwd().resolve()
+    results: list[str] = []
+    for entry in raw.split(":"):
+        p = entry.strip()
+        if not p:
+            continue
+        candidate = Path(p)
+        if not candidate.is_absolute():
+            candidate = base / candidate
+        results.append(str(candidate.resolve()))
+    return results

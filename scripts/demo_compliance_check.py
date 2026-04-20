@@ -263,7 +263,22 @@ def _severity_icon(severity: str) -> str:
     return f"{_Y}WARNING  {_RESET}"
 
 
-def print_report(session, checks: list[ConstraintCheck], replay: list):
+def load_compliance_state(db: Database, session_id: str) -> dict:
+    """Return expected/observed/failures from persisted session_state, or empty dict."""
+    try:
+        state = db.load_session_state(session_id)
+    except Exception:
+        state = None
+    if not state:
+        return {}
+    return {
+        "expected_artifacts": state.get("expected_artifacts", []) or [],
+        "observed_artifacts": state.get("observed_artifacts", []) or [],
+        "compliance_failures": state.get("compliance_failures", []) or [],
+    }
+
+
+def print_report(session, checks: list[ConstraintCheck], replay: list, compliance: dict | None = None):
     total = len(checks)
     passed = sum(1 for c in checks if c.status == "PASS")
     warned = sum(1 for c in checks if c.status == "WARN")
@@ -351,6 +366,26 @@ def print_report(session, checks: list[ConstraintCheck], replay: list):
         print(f"   displacement={first_score.instruction_displacement:.2f}.")
         print(f'   High probability of instruction non-compliance."{_RESET}')
 
+    # Artifact compliance (expected-vs-observed file writes)
+    if compliance is not None:
+        print(f"\n{_BOLD}{'─' * 64}{_RESET}")
+        print(f"{_BOLD}  Artifact Compliance{_RESET}")
+        expected = compliance.get("expected_artifacts", [])
+        failures = compliance.get("compliance_failures", [])
+        if not expected:
+            print(f"  {_DIM}N/A — no expected artifacts configured "
+                  f"(set RTFI_EXPECTED_ARTIFACTS to enable).{_RESET}")
+        elif not failures:
+            print(f"  {_G}{_BOLD}PASS{_RESET} — all {len(expected)} expected artifact(s) observed.")
+            for p in expected:
+                print(f"    {_G}✓{_RESET} {p}")
+        else:
+            print(f"  {_R}{_BOLD}FAIL{_RESET} — {len(failures)} of {len(expected)} expected artifact(s) missing.")
+            print(f"  {_DIM}Expected:{_RESET}")
+            for p in expected:
+                marker = f"{_R}✗{_RESET}" if p in failures else f"{_G}✓{_RESET}"
+                print(f"    {marker} {p}")
+
     print(f"\n{_BOLD}{'─' * 64}{_RESET}")
     print(
         f"  {_DIM}Improve instructions: use 'RTFI session-analyzer' agent for CLAUDE.md suggestions{_RESET}"
@@ -422,15 +457,25 @@ def main():
         # Check constraints
         checks = check_constraints(replay, constraints)
 
+        # Compliance artifacts (expected-vs-observed writes)
+        compliance = load_compliance_state(db, session.id)
+        compliance_failed = bool(compliance.get("compliance_failures"))
+        overall_failed = any(c.status == "FAIL" for c in checks) or compliance_failed
+
         if args.json:
             output = {
                 "session_id": session.id,
                 "peak_risk": session.peak_risk_score,
                 "event_count": len(events),
                 "outcome": session.outcome.value,
-                "verdict": "NON-COMPLIANT"
-                if any(c.status == "FAIL" for c in checks)
-                else "COMPLIANT",
+                "verdict": "NON-COMPLIANT" if overall_failed else "COMPLIANT",
+                "artifact_compliance": {
+                    "expected": compliance.get("expected_artifacts", []),
+                    "observed": compliance.get("observed_artifacts", []),
+                    "missing": compliance.get("compliance_failures", []),
+                    "status": "N/A" if not compliance.get("expected_artifacts")
+                    else ("FAIL" if compliance_failed else "PASS"),
+                },
                 "constraints": [
                     {
                         "id": c.constraint["id"],
@@ -453,7 +498,7 @@ def main():
             }
             print(json.dumps(output, indent=2))
         else:
-            print_report(session, checks, replay)
+            print_report(session, checks, replay, compliance=compliance)
 
     finally:
         db.close()

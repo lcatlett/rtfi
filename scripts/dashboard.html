@@ -328,10 +328,11 @@ tbody tr:hover { background: #F8FAFC; }
               <th data-sort="total_tool_calls" style="text-align:right">Tools <span class="sort-arrow">&#9650;</span></th>
               <th data-sort="total_agent_spawns" style="text-align:right">Agents <span class="sort-arrow">&#9650;</span></th>
               <th data-sort="outcome">Outcome <span class="sort-arrow">&#9650;</span></th>
+              <th data-sort="compliance">Compliance <span class="sort-arrow">&#9650;</span></th>
             </tr>
           </thead>
           <tbody id="sessions-body">
-            <tr><td colspan="6" class="empty">Loading sessions...</td></tr>
+            <tr><td colspan="7" class="empty">Loading sessions...</td></tr>
           </tbody>
         </table>
       </div>
@@ -704,10 +705,11 @@ function sortSessions() {
 
     const tbody = document.getElementById('sessions-body');
     if (sorted.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty">No sessions recorded yet</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty">No sessions recorded yet</td></tr>';
         return;
     }
     const threshold = CFG.threshold || 70;
+    const escapeAttr = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
     tbody.innerHTML = sorted.map(s => {
         const sid = s.id.substring(0, 8) + '..';
         const time = s.started_at ? new Date(s.started_at).toLocaleString(undefined, { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '--';
@@ -715,6 +717,19 @@ function sortSessions() {
         const score = s.peak_risk_score.toFixed(1);
         const outcomeClass = s.outcome.replace(/ /g, '_');
         const outcomeLabel = s.outcome.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+        let complianceCell;
+        if (s.compliance === 'PASS') {
+            complianceCell = '<span class="obadge completed" title="All expected artifacts observed">&#10003;</span>';
+        } else if (s.compliance === 'FAIL') {
+            const missing = Array.isArray(s.compliance_missing) && s.compliance_missing.length
+                ? 'Missing: ' + s.compliance_missing.join(', ')
+                : 'Expected artifacts not written';
+            complianceCell = '<span class="obadge user_aborted" title="' + escapeAttr(missing) + '">&#10007;</span>';
+        } else {
+            complianceCell = '<span style="color:var(--slate)" title="Compliance enforcement not configured for this session">N/A</span>';
+        }
+
         return '<tr data-sid="' + s.id + '">' +
             '<td style="font-family:\'SF Mono\',monospace;font-size:0.85em">' + sid + '</td>' +
             '<td style="color:var(--slate)">' + time + '</td>' +
@@ -722,6 +737,7 @@ function sortSessions() {
             '<td style="text-align:right;color:var(--text-2)">' + s.total_tool_calls + '</td>' +
             '<td style="text-align:right;color:var(--text-2)">' + s.total_agent_spawns + '</td>' +
             '<td><span class="obadge ' + outcomeClass + '">' + outcomeLabel + '</span></td>' +
+            '<td>' + complianceCell + '</td>' +
             '</tr>';
     }).join('');
 

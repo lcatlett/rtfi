@@ -80,6 +80,7 @@ from rtfi_core import (
     estimate_tokens,
     get_statsd,
     load_settings,
+    normalize_artifact_path,
 )
 
 # ── HMAC Audit Trail ────────────────────────────────────────────────────
@@ -191,6 +192,12 @@ def validate_hook_data(hook_data: Any) -> dict[str, Any]:
     session_id = hook_data.get("session_id")
     if isinstance(session_id, str) and len(session_id) < 128:
         validated["session_id"] = session_id
+
+    tool_input = hook_data.get("tool_input")
+    if isinstance(tool_input, dict):
+        file_path = tool_input.get("file_path")
+        if isinstance(file_path, str) and 0 < len(file_path) < 4096:
+            validated["file_path"] = file_path
 
     return validated
 
@@ -363,6 +370,7 @@ def handle_session_start(hook_data: dict[str, Any]) -> dict[str, Any]:
     state = engine.get_session_state(session_id)
     if state:
         state.instruction_tokens = _measure_instruction_tokens()
+        state.expected_artifacts = list(settings.get("expected_artifacts", []))
 
     db.save_session(session)
 
@@ -507,6 +515,15 @@ def handle_post_tool_use(hook_data: dict[str, Any]) -> dict[str, Any]:
 
         state.last_context_tokens = context_tokens
 
+        # Observe Write/Edit artifacts for compliance tracking
+        if validated.get("tool_name") in ("Write", "Edit"):
+            fp = validated.get("file_path")
+            if fp:
+                project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+                normalized = normalize_artifact_path(fp, project_dir)
+                if normalized and normalized not in state.observed_artifacts:
+                    state.observed_artifacts.append(normalized)
+
     event = RiskEvent(
         session_id=session_id,
         event_type=EventType.RESPONSE,
@@ -543,6 +560,7 @@ def handle_stop(hook_data: dict[str, Any]) -> dict[str, Any]:
 
     if session:
         # Calculate final score from persisted state
+        missing_artifacts: list[str] = []
         state_dict = db.load_session_state(session_id)
         if state_dict:
             temp_state = SessionState.from_dict(
@@ -564,6 +582,25 @@ def handle_stop(hook_data: dict[str, Any]) -> dict[str, Any]:
                 instruction_tokens=temp_state.instruction_tokens,
             )
             session.final_risk_score = final_score.total
+
+            # Compliance artifact diff: expected vs observed (no-op if empty)
+            if temp_state.expected_artifacts:
+                observed = set(temp_state.observed_artifacts)
+                missing_artifacts = [
+                    a for a in temp_state.expected_artifacts if a not in observed
+                ]
+                temp_state.compliance_failures = missing_artifacts
+                session.compliance_violated = bool(missing_artifacts)
+                db.save_session(session, session_state=temp_state.to_dict())
+                log_audit(
+                    "COMPLIANCE_CHECK",
+                    session_id,
+                    {
+                        "expected": temp_state.expected_artifacts,
+                        "observed": sorted(observed),
+                        "failures": missing_artifacts,
+                    },
+                )
         else:
             session.final_risk_score = session.peak_risk_score
 
@@ -580,6 +617,7 @@ def handle_stop(hook_data: dict[str, Any]) -> dict[str, Any]:
                 "final_risk": session.final_risk_score,
                 "tool_calls": session.total_tool_calls,
                 "agent_spawns": session.total_agent_spawns,
+                "compliance_violated": session.compliance_violated,
             },
         )
 
@@ -596,6 +634,8 @@ def handle_stop(hook_data: dict[str, Any]) -> dict[str, Any]:
             f"RTFI: Session complete. Peak risk: {session.peak_risk_score:.1f}, "
             f"Tool calls: {session.total_tool_calls}, Agent spawns: {session.total_agent_spawns}"
         )
+        if missing_artifacts:
+            summary += f" | Compliance: FAILED — missing: {', '.join(missing_artifacts)}"
 
         return {
             "decision": "approve",

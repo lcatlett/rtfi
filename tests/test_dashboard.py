@@ -133,3 +133,92 @@ class TestDashboardAPI:
             content = resp.read().decode()
             assert "<!DOCTYPE html>" in content
             assert "chart.js" in content.lower() or "Chart" in content
+
+    def test_api_sessions_includes_compliance_fields(self, dashboard_server):
+        base_url, _ = dashboard_server
+        data = _get(f"{base_url}/api/sessions?limit=10")
+        assert data["sessions"], "expected at least one session row"
+        row = data["sessions"][0]
+        assert "compliance" in row
+        assert row["compliance"] in ("PASS", "FAIL", "N/A")
+        assert "compliance_missing" in row
+        assert isinstance(row["compliance_missing"], list)
+
+    def test_api_compliance_stats_structure(self, dashboard_server):
+        base_url, _ = dashboard_server
+        data = _get(f"{base_url}/api/compliance-stats")
+        for key in (
+            "high_displacement_threshold",
+            "high_displacement_total",
+            "high_displacement_violated",
+            "displacement_compliance_ratio",
+            "enforced_total",
+            "enforced_violated",
+        ):
+            assert key in data
+        assert data["high_displacement_threshold"] == 0.8
+        # No violated sessions populated → ratio is zero.
+        assert data["displacement_compliance_ratio"] == 0.0
+
+
+class TestComplianceStatsAggregation:
+    """Unit-test api_compliance_stats over a populated temp DB."""
+
+    def test_correlation_with_mixed_sessions(self):
+        import sys
+        import tempfile
+        from pathlib import Path
+
+        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+        from rtfi_core import Database, Session, SessionOutcome
+        from rtfi_dashboard import api_compliance_stats
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(db_path=Path(tmp) / "corr.db")
+
+            # Session A: high displacement + compliance violated → counts toward both.
+            a = Session(id="A", outcome=SessionOutcome.COMPLETED, compliance_violated=True)
+            db.save_session(
+                a,
+                session_state={
+                    "instruction_tokens": 2500,
+                    "skill_tokens_injected": 3000,
+                    "expected_artifacts": ["CONTEXT.md"],
+                    "observed_artifacts": [],
+                    "compliance_failures": ["CONTEXT.md"],
+                },
+            )
+
+            # Session B: high displacement but compliance passed.
+            b = Session(id="B", outcome=SessionOutcome.COMPLETED, compliance_violated=False)
+            db.save_session(
+                b,
+                session_state={
+                    "instruction_tokens": 2500,
+                    "skill_tokens_injected": 2500,
+                    "expected_artifacts": ["CONTEXT.md"],
+                    "observed_artifacts": ["CONTEXT.md"],
+                    "compliance_failures": [],
+                },
+            )
+
+            # Session C: low displacement, no enforcement.
+            c = Session(id="C", outcome=SessionOutcome.COMPLETED, compliance_violated=False)
+            db.save_session(
+                c,
+                session_state={
+                    "instruction_tokens": 2500,
+                    "skill_tokens_injected": 100,
+                    "expected_artifacts": [],
+                    "observed_artifacts": [],
+                    "compliance_failures": [],
+                },
+            )
+
+            stats = api_compliance_stats(db)
+            assert stats["high_displacement_total"] == 2
+            assert stats["high_displacement_violated"] == 1
+            assert stats["displacement_compliance_ratio"] == 0.5
+            assert stats["enforced_total"] == 2
+            assert stats["enforced_violated"] == 1
+            db.close()

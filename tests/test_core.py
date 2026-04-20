@@ -17,6 +17,7 @@ from rtfi_core import (
     SessionState,
     estimate_tokens,
     load_settings,
+    normalize_artifact_path,
     risk_level,
 )
 
@@ -446,6 +447,49 @@ class TestRiskEngine:
         assert restored.skill_tokens_injected == 0
         assert restored.last_context_tokens == 0
 
+    def test_session_state_compliance_fields_roundtrip(self):
+        session = Session(id="test-compl-rt")
+        state = SessionState(
+            session=session,
+            expected_artifacts=["CONTEXT.md", "docs/NOTES.md"],
+            observed_artifacts=["CONTEXT.md"],
+            compliance_failures=["docs/NOTES.md"],
+        )
+        d = state.to_dict()
+        assert d["expected_artifacts"] == ["CONTEXT.md", "docs/NOTES.md"]
+        assert d["observed_artifacts"] == ["CONTEXT.md"]
+        assert d["compliance_failures"] == ["docs/NOTES.md"]
+
+        restored = SessionState.from_dict(d, session)
+        assert restored.expected_artifacts == ["CONTEXT.md", "docs/NOTES.md"]
+        assert restored.observed_artifacts == ["CONTEXT.md"]
+        assert restored.compliance_failures == ["docs/NOTES.md"]
+
+    def test_session_state_compliance_defaults_backward_compat(self):
+        """Legacy state dicts without compliance fields should deserialize safely."""
+        session = Session(id="test-compl-legacy")
+        legacy_dict = {
+            "tokens": 3000,
+            "steps_since_confirm": 2,
+            "tool_timestamps": [],
+            "agent_spawn_timestamps": [],
+        }
+        restored = SessionState.from_dict(legacy_dict, session)
+        assert restored.expected_artifacts == []
+        assert restored.observed_artifacts == []
+        assert restored.compliance_failures == []
+
+    def test_session_state_compliance_rejects_non_string_entries(self):
+        """Malformed persisted lists should not crash deserialization."""
+        session = Session(id="test-compl-malformed")
+        malformed = {
+            "expected_artifacts": ["CONTEXT.md", 42, None],
+            "observed_artifacts": "not-a-list",
+        }
+        restored = SessionState.from_dict(malformed, session)
+        assert restored.expected_artifacts == ["CONTEXT.md"]
+        assert restored.observed_artifacts == []
+
     def test_active_agents_decay_window(self):
         """AC-3 (partial): Agents older than decay window don't count."""
         session = Session(id="test-decay")
@@ -521,6 +565,64 @@ class TestRiskEngine:
         assert len(callback_fired) > 0
 
 
+# ── Compliance Tracker Tests ─────────────────────────────────────────────
+
+
+class TestNormalizeArtifactPath:
+    def test_absolute_path_inside_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp).resolve()
+            target = project / "CONTEXT.md"
+            target.write_text("x")
+            assert normalize_artifact_path(str(target), str(project)) == "CONTEXT.md"
+
+    def test_relative_path_resolves_against_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp).resolve()
+            (project / "docs").mkdir()
+            (project / "docs" / "NOTES.md").write_text("x")
+            result = normalize_artifact_path("docs/NOTES.md", str(project))
+            assert result == "docs/NOTES.md"
+
+    def test_path_outside_project_returns_none(self):
+        with tempfile.TemporaryDirectory() as proj_dir, tempfile.TemporaryDirectory() as other:
+            outside = Path(other).resolve() / "escape.md"
+            outside.write_text("x")
+            assert normalize_artifact_path(str(outside), proj_dir) is None
+
+    def test_missing_project_dir_returns_none(self):
+        assert normalize_artifact_path("CONTEXT.md", None) is None
+
+    def test_empty_path_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            assert normalize_artifact_path("", tmp) is None
+
+
+class TestComplianceDatabase:
+    def test_compliance_violated_roundtrip(self, temp_db):
+        session = Session(id="test-compl-db", compliance_violated=True)
+        temp_db.save_session(session)
+        loaded = temp_db.get_session("test-compl-db")
+        assert loaded is not None
+        assert loaded.compliance_violated is True
+
+    def test_compliance_violated_default_false(self, temp_db):
+        session = Session(id="test-compl-default")
+        temp_db.save_session(session)
+        loaded = temp_db.get_session("test-compl-default")
+        assert loaded is not None
+        assert loaded.compliance_violated is False
+
+    def test_compliance_violated_column_migration(self, temp_db):
+        import sqlite3
+
+        conn = sqlite3.connect(temp_db.db_path)
+        cursor = conn.execute("PRAGMA table_info(sessions)")
+        columns = {row[1] for row in cursor.fetchall()}
+        conn.close()
+        assert "compliance_violated" in columns
+
+
 # ── Config Tests ─────────────────────────────────────────────────────────
 
 
@@ -562,6 +664,26 @@ class TestConfig:
             mp.setenv("RTFI_AGENT_DECAY_SECONDS", "120")
             settings = load_settings(log_dir=Path(tempfile.mkdtemp()))
         assert settings["agent_decay_seconds"] == 120
+
+    def test_load_settings_expected_artifacts_default(self):
+        with pytest.MonkeyPatch.context() as mp:
+            for k in list(os.environ):
+                if k.startswith("RTFI_"):
+                    mp.delenv(k, raising=False)
+            settings = load_settings(log_dir=Path(tempfile.mkdtemp()))
+        assert settings["expected_artifacts"] == ["CONTEXT.md"]
+
+    def test_load_settings_expected_artifacts_env_override(self):
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("RTFI_EXPECTED_ARTIFACTS", "CONTEXT.md, docs/NOTES.md,,")
+            settings = load_settings(log_dir=Path(tempfile.mkdtemp()))
+        assert settings["expected_artifacts"] == ["CONTEXT.md", "docs/NOTES.md"]
+
+    def test_load_settings_expected_artifacts_disabled(self):
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("RTFI_EXPECTED_ARTIFACTS", "")
+            settings = load_settings(log_dir=Path(tempfile.mkdtemp()))
+        assert settings["expected_artifacts"] == []
 
 
 # ── Risk Level Tests ─────────────────────────────────────────────────────

@@ -225,6 +225,7 @@ class Session:
     total_tool_calls: int = 0
     total_agent_spawns: int = 0
     project_dir: str | None = None
+    compliance_violated: bool = False
 
 
 # ── Database ─────────────────────────────────────────────────────────────
@@ -244,7 +245,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     total_agent_spawns INTEGER DEFAULT 0,
     outcome TEXT DEFAULT 'in_progress',
     session_state TEXT,
-    project_dir TEXT
+    project_dir TEXT,
+    compliance_violated INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS risk_events (
@@ -314,6 +316,10 @@ class Database:
             conn.execute("ALTER TABLE sessions ADD COLUMN session_state TEXT")
         if "project_dir" not in columns:
             conn.execute("ALTER TABLE sessions ADD COLUMN project_dir TEXT")
+        if "compliance_violated" not in columns:
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN compliance_violated INTEGER DEFAULT 0"
+            )
         conn.commit()
 
     def save_session(self, session: Session, session_state: dict[str, Any] | None = None) -> None:
@@ -330,8 +336,9 @@ class Database:
             """INSERT OR IGNORE INTO sessions
             (id, started_at, ended_at, instruction_source, instruction_hash,
              final_risk_score, peak_risk_score, total_tool_calls,
-             total_agent_spawns, outcome, project_dir, session_state)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             total_agent_spawns, outcome, project_dir, session_state,
+             compliance_violated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 session.id,
                 session.started_at.isoformat(),
@@ -345,6 +352,7 @@ class Database:
                 session.outcome.value,
                 getattr(session, "project_dir", None),
                 state_json,
+                1 if getattr(session, "compliance_violated", False) else 0,
             ),
         )
 
@@ -360,6 +368,7 @@ class Database:
             "total_agent_spawns=?",
             "outcome=?",
             "project_dir=?",
+            "compliance_violated=?",
         ]
         params: list[Any] = [
             session.started_at.isoformat(),
@@ -372,6 +381,7 @@ class Database:
             session.total_agent_spawns,
             session.outcome.value,
             getattr(session, "project_dir", None),
+            1 if getattr(session, "compliance_violated", False) else 0,
         ]
         if session_state is not None:
             cols.append("session_state=?")
@@ -569,6 +579,11 @@ class Database:
         except (IndexError, KeyError):
             project_dir = None
 
+        try:
+            compliance_violated = bool(row["compliance_violated"])
+        except (IndexError, KeyError):
+            compliance_violated = False
+
         return Session(
             id=row["id"],
             started_at=_parse_datetime(row["started_at"]),
@@ -581,6 +596,7 @@ class Database:
             total_agent_spawns=row["total_agent_spawns"] or 0,
             outcome=SessionOutcome(row["outcome"]),
             project_dir=project_dir,
+            compliance_violated=compliance_violated,
         )
 
     @staticmethod
@@ -613,6 +629,28 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+def normalize_artifact_path(raw_path: str, project_dir: str | None) -> str | None:
+    """Resolve a path to a project-root-relative POSIX string.
+
+    Returns None when project_dir is unset, raw_path is empty, or the resolved
+    path escapes project_dir — so writes to siblings/temp dirs never match an
+    expected in-project artifact.
+    """
+    if not raw_path or not project_dir:
+        return None
+    try:
+        project_root = Path(project_dir).resolve()
+        target = Path(raw_path)
+        if not target.is_absolute():
+            target = (project_root / target).resolve()
+        else:
+            target = target.resolve()
+        rel = target.relative_to(project_root)
+    except (ValueError, OSError):
+        return None
+    return rel.as_posix()
+
+
 @dataclass
 class SessionState:
     """Mutable state for a monitored session."""
@@ -627,6 +665,9 @@ class SessionState:
     skill_tokens_injected: int = 0
     pre_skill_tokens: int | None = None
     last_context_tokens: int = 0
+    expected_artifacts: list[str] = field(default_factory=list)
+    observed_artifacts: list[str] = field(default_factory=list)
+    compliance_failures: list[str] = field(default_factory=list)
 
     @property
     def active_agents(self) -> int:
@@ -670,6 +711,9 @@ class SessionState:
             "instruction_tokens": self.instruction_tokens,
             "skill_tokens_injected": self.skill_tokens_injected,
             "last_context_tokens": self.last_context_tokens,
+            "expected_artifacts": list(self.expected_artifacts),
+            "observed_artifacts": list(self.observed_artifacts),
+            "compliance_failures": list(self.compliance_failures),
         }
 
     @classmethod
@@ -707,6 +751,12 @@ class SessionState:
             for _ in range(data["active_agents"]):
                 agent_timestamps.append(now)
 
+        def _str_list(key: str) -> list[str]:
+            raw = data.get(key, [])
+            if not isinstance(raw, list):
+                return []
+            return [item for item in raw if isinstance(item, str)]
+
         return cls(
             session=session,
             tokens=data.get("tokens", 0),
@@ -717,6 +767,9 @@ class SessionState:
             instruction_tokens=data.get("instruction_tokens", 0),
             skill_tokens_injected=data.get("skill_tokens_injected", 0),
             last_context_tokens=data.get("last_context_tokens", 0),
+            expected_artifacts=_str_list("expected_artifacts"),
+            observed_artifacts=_str_list("observed_artifacts"),
+            compliance_failures=_str_list("compliance_failures"),
         )
 
 
@@ -860,6 +913,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "instruction_tokens": 0,
     "system_prompt_tokens": 2000,
     "displacement_weight": 0.10,
+    "expected_artifacts": "CONTEXT.md",
 }
 
 _LOG_DIR = Path.home() / ".rtfi"
@@ -974,6 +1028,15 @@ def load_settings(log_dir: Path | None = None) -> dict[str, Any]:
     # Parse checkpoint_tools (comma-separated string to set)
     ct = os.environ.get("RTFI_CHECKPOINT_TOOLS", str(config.get("checkpoint_tools", "")))
     config["checkpoint_tools"] = {t.strip() for t in ct.split(",") if t.strip()}
+
+    # Parse expected_artifacts (comma-separated string to list).
+    # Precedence: env var → config.env / rtfi.local.md value → DEFAULT_SETTINGS.
+    expected_raw = os.environ.get("RTFI_EXPECTED_ARTIFACTS")
+    if expected_raw is None:
+        expected_raw = str(config.get("expected_artifacts", ""))
+    config["expected_artifacts"] = [
+        item.strip() for item in expected_raw.split(",") if item.strip()
+    ]
 
     logger.info(f"Loaded settings: threshold={config['threshold']}, mode={config['action_mode']}")
     return config

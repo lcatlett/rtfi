@@ -257,13 +257,44 @@ def _status_icon(status: str) -> str:
     }.get(status, status)
 
 
+def load_compliance(db: Database, session) -> dict:
+    """Return a compliance summary for the session.
+
+    status:
+      - "N/A"  — no expected_artifacts configured for this session
+      - "PASS" — compliance_violated=False and expected_artifacts non-empty
+      - "FAIL" — compliance_violated=True
+    """
+    state = db.load_session_state(session.id) or {}
+    expected = [a for a in (state.get("expected_artifacts") or []) if isinstance(a, str)]
+    observed = [a for a in (state.get("observed_artifacts") or []) if isinstance(a, str)]
+    failures = [a for a in (state.get("compliance_failures") or []) if isinstance(a, str)]
+    if not expected:
+        status = "N/A"
+    elif getattr(session, "compliance_violated", False):
+        status = "FAIL"
+    else:
+        status = "PASS"
+    return {
+        "status": status,
+        "expected": expected,
+        "observed": observed,
+        "missing": failures,
+    }
+
+
 def _severity_icon(severity: str) -> str:
     if severity == "violation":
         return f"{_R}VIOLATION{_RESET}"
     return f"{_Y}WARNING  {_RESET}"
 
 
-def print_report(session, checks: list[ConstraintCheck], replay: list):
+def print_report(
+    session,
+    checks: list[ConstraintCheck],
+    replay: list,
+    compliance: dict | None = None,
+):
     total = len(checks)
     passed = sum(1 for c in checks if c.status == "PASS")
     warned = sum(1 for c in checks if c.status == "WARN")
@@ -287,6 +318,18 @@ def print_report(session, checks: list[ConstraintCheck], replay: list):
     overall = "COMPLIANT" if failed == 0 else "NON-COMPLIANT"
     overall_color = _G if failed == 0 else _R
     print(f"  Verdict  : {overall_color}{_BOLD}{overall}{_RESET}")
+
+    if compliance:
+        status = compliance["status"]
+        if status == "PASS":
+            artifacts = ", ".join(compliance["expected"]) or "(none)"
+            print(f"  Artifacts: {_G}PASS{_RESET} — observed: {artifacts}")
+        elif status == "FAIL":
+            missing = ", ".join(compliance["missing"]) or "(unknown)"
+            print(f"  Artifacts: {_R}{_BOLD}FAIL{_RESET} — missing: {missing}")
+        else:
+            print(f"  Artifacts: {_DIM}N/A — no expected artifacts configured{_RESET}")
+
     print(f"\n{_BOLD}{'─' * 64}{_RESET}")
 
     for check in checks:
@@ -421,6 +464,7 @@ def main():
 
         # Check constraints
         checks = check_constraints(replay, constraints)
+        compliance = load_compliance(db, session)
 
         if args.json:
             output = {
@@ -431,6 +475,7 @@ def main():
                 "verdict": "NON-COMPLIANT"
                 if any(c.status == "FAIL" for c in checks)
                 else "COMPLIANT",
+                "compliance": compliance,
                 "constraints": [
                     {
                         "id": c.constraint["id"],
@@ -453,7 +498,7 @@ def main():
             }
             print(json.dumps(output, indent=2))
         else:
-            print_report(session, checks, replay)
+            print_report(session, checks, replay, compliance)
 
     finally:
         db.close()

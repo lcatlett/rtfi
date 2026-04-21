@@ -23,6 +23,7 @@ Read the output and summarize:
 - **Which constraints failed** and at which step
 - **Primary risk driver** from the score decomposition (whichever factor contributed the most points)
 - **What RTFI told Claude** at the threshold breach moment (the systemMessage)
+- **Artifact compliance**: from the "Artifacts" line — PASS (all expected files observed), FAIL (list which expected files were never written during the session), or N/A (no expected artifacts configured for the session)
 
 If the user wants to adjust the constraints being checked, they can create a JSON file like:
 

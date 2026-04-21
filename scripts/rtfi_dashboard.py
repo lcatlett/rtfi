@@ -19,6 +19,7 @@ sys.path.insert(0, str(script_dir))
 from rtfi_core import (
     Database,
     RiskScore,
+    Session,
     SessionOutcome,
     SessionState,
     __version__,
@@ -56,7 +57,30 @@ def _json_serial(obj):
     raise TypeError(f"Type {type(obj)} not serializable")
 
 
-def _session_to_dict(session, stale_hours: int = 2) -> dict:
+def _compliance_summary(session: Session, db: "Database | None") -> tuple[str, list[str]]:
+    """Return (status, missing_artifacts) for a session.
+
+    status is "PASS" / "FAIL" / "N/A" — "N/A" when the session has no
+    expected_artifacts recorded (feature not configured for this session).
+    """
+    if db is None:
+        return ("FAIL", []) if session.compliance_violated else ("N/A", [])
+    state = db.load_session_state(session.id)
+    if not state:
+        return ("FAIL", []) if session.compliance_violated else ("N/A", [])
+    expected = state.get("expected_artifacts") or []
+    if not expected:
+        return ("N/A", [])
+    if session.compliance_violated:
+        missing = state.get("compliance_failures") or []
+        missing = [m for m in missing if isinstance(m, str)]
+        return ("FAIL", missing)
+    return ("PASS", [])
+
+
+def _session_to_dict(
+    session: Session, stale_hours: int = 2, db: "Database | None" = None
+) -> dict:
     """Convert a Session model to a JSON-safe dict."""
     outcome = session.outcome.value
     # Mark stale in-progress sessions as abandoned
@@ -64,6 +88,8 @@ def _session_to_dict(session, stale_hours: int = 2) -> dict:
         elapsed = datetime.now(timezone.utc) - session.started_at
         if elapsed > timedelta(hours=stale_hours):
             outcome = "abandoned"
+
+    compliance, missing = _compliance_summary(session, db)
 
     return {
         "id": session.id,
@@ -74,6 +100,8 @@ def _session_to_dict(session, stale_hours: int = 2) -> dict:
         "total_agent_spawns": session.total_agent_spawns,
         "outcome": outcome,
         "project_dir": session.project_dir,
+        "compliance": compliance,
+        "compliance_missing": missing,
     }
 
 
@@ -165,7 +193,7 @@ def api_live(db: Database) -> dict:
             "decision_velocity": score.decision_velocity,
             "threshold_exceeded": score.threshold_exceeded,
         },
-        "session": _session_to_dict(session, stale_hours),
+        "session": _session_to_dict(session, stale_hours, db),
         "is_live": is_live,
     }
 
@@ -188,7 +216,7 @@ def api_sessions(db: Database, params: dict) -> dict:
     page = all_sessions[offset : offset + limit]
 
     stale_hours = int(_settings.get("stale_session_hours", STALE_SESSION_HOURS))
-    sessions = [_session_to_dict(s, stale_hours) for s in page]
+    sessions = [_session_to_dict(s, stale_hours, db) for s in page]
 
     return {"sessions": sessions, "total": total}
 
@@ -208,9 +236,67 @@ def api_session_detail(db: Database, session_id: str) -> dict:
     state_dict = db.load_session_state(session.id)
 
     return {
-        "session": _session_to_dict(session, stale_hours),
+        "session": _session_to_dict(session, stale_hours, db),
         "events": [_event_to_dict(e) for e in events],
         "state": state_dict,
+    }
+
+
+HIGH_DISPLACEMENT_RATIO = 0.8
+
+
+def api_compliance_stats(db: Database) -> dict:
+    """GET /api/compliance-stats — correlate displacement with compliance outcomes.
+
+    Reports:
+      - high_displacement_total: sessions with skill/instruction token ratio >= 0.8
+      - high_displacement_violated: subset that also have compliance_violated=1
+      - displacement_compliance_ratio: violated / total (0.0 when total == 0)
+      - enforced_total: sessions with a non-empty expected_artifacts list
+      - enforced_violated: enforced sessions that failed compliance
+    """
+    conn = db._connect()
+    rows = conn.execute(
+        "SELECT compliance_violated, session_state FROM sessions "
+        "WHERE session_state IS NOT NULL"
+    ).fetchall()
+
+    high_disp_total = 0
+    high_disp_violated = 0
+    enforced_total = 0
+    enforced_violated = 0
+
+    for violated_flag, state_json in rows:
+        try:
+            state = json.loads(state_json)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        violated = bool(violated_flag)
+
+        expected = state.get("expected_artifacts") or []
+        if expected:
+            enforced_total += 1
+            if violated:
+                enforced_violated += 1
+
+        instruction_tokens = state.get("instruction_tokens") or 0
+        skill_tokens = state.get("skill_tokens_injected") or 0
+        if instruction_tokens > 0:
+            ratio = min(1.0, skill_tokens / instruction_tokens)
+            if ratio >= HIGH_DISPLACEMENT_RATIO:
+                high_disp_total += 1
+                if violated:
+                    high_disp_violated += 1
+
+    disp_ratio = (high_disp_violated / high_disp_total) if high_disp_total else 0.0
+
+    return {
+        "high_displacement_threshold": HIGH_DISPLACEMENT_RATIO,
+        "high_displacement_total": high_disp_total,
+        "high_displacement_violated": high_disp_violated,
+        "displacement_compliance_ratio": round(disp_ratio, 4),
+        "enforced_total": enforced_total,
+        "enforced_violated": enforced_violated,
     }
 
 
@@ -362,6 +448,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         return
             elif path == "/api/stats":
                 data = api_stats(db)
+            elif path == "/api/compliance-stats":
+                data = api_compliance_stats(db)
             elif path == "/api/chart-data":
                 data = api_chart_data(db, params)
             else:

@@ -1,201 +1,129 @@
 # RTFI - Real-Time Instruction Compliance Risk Scoring
 
-A Claude Code plugin that predicts when AI sessions are at risk of ignoring your instructions, enabling proactive intervention before failures occur.
+**Closing the LLM Instruction Gap with deterministic risk scoring. Because managing AI risk is tractable even when fixing AI behavior isn't.**
 
-## Problem
+[RTFI](https://github.com/lcatlett/rtfi) is a Claude Code plugin and deterministic engine that predicts when AI sessions are at risk of ignoring your instructions, enabling proactive intervention before failures occur.
 
-LLMs ignore explicit instructions at unpredictable rates. You provide clear guidelines in CLAUDE.md, system prompts, or custom instructions - and the AI disregards them without notification. Discovery happens only after significant work is wasted.
+## **⚖️ Project Philosophy**
 
-## Solution
+**Predicting the exact millisecond your LLM stops being an assistant and starts being a liability.**
 
-RTFI calculates a real-time **Compliance Risk Score** based on measurable session factors:
+Most AI tooling tries to "fix" AI behavior—an exercise in futility when dealing with non-deterministic black boxes. **RTFI** operates on a different premise: **Fixing AI behavior is impossible, but managing AI risk is tractable.**
 
-| Factor | Weight | Rationale |
-|--------|--------|-----------|
-| Context length | 25% | Longer context → earlier instructions deprioritized |
-| Agent fanout | 30% | Parallel agents → highest risk factor |
-| Autonomy depth | 25% | Steps since human confirmation |
-| Decision velocity | 20% | Tool calls per minute |
+Instead of chasing hallucinations after they happen, we use a deterministic engine to monitor the structural conditions that lead to failure:
 
-When the score exceeds your threshold (default: 70), RTFI alerts you before failures occur.
+* **Vibes are not a strategy:** We don't use an LLM to monitor your LLM. That's just recursive chaos. We use math.  
+* **The "Agent Apocalypse" constant:** Parallel agents don't scale productivity; they scale entropy. We quantify [Agent Fanout](https://github.com/lcatlett/rtfi/blob/main/docs/ARCHITECTURE.md) before it burns your budget.  
+* **Context is a liability:** The longer the chat, the lower the compliance. We treat context length as a countdown, not a feature.
 
-## Prerequisites
+## **🚩 The Problem: The Instruction Gap**
 
-- **Python >= 3.10** (3.14 pinned via `.mise.toml`)
-- **[mise](https://mise.jdx.dev/)** (recommended) — automatically activates the correct Python when you `cd` into the project
+LLMs in production workflows ignore explicit instructions at unpredictable rates. You write a system prompt or a CLAUDE.md file, the AI acknowledges it, and then it proceeds to disregard your constraints without notification.
 
-No third-party dependencies — RTFI uses Python stdlib only.
+This is a documented systemic failure known as the **Instruction Gap**. Research confirms that even the most "advanced" models suffer from structural non-compliance:
 
-If you use mise, Python is set up automatically:
+* [**MOSAIC Benchmark**](https://github.com/lcatlett/rtfi/blob/main/docs/PRODUCT-BRIEF.md)**:** Proves that models suffer from "lost in the middle" biases; instructions buried in the context are ignored significantly more often.  
+* [**InFoBench**](https://github.com/lcatlett/rtfi/blob/main/docs/PRODUCT-BRIEF.md)**:** Shows that even large-scale instruction-tuned LLMs fail to follow simple constraints in zero-shot settings.  
+* **The Compliance Reality:** In enterprise scenarios, leading LLMs have been found to rack up **660 to 1,330 instruction violations** in a single session.
 
-```bash
-mise install   # installs Python 3.14 if not already present
-```
+**RTFI** closes this gap by shifting the focus from reactive "hallucination detection" to proactive **deterministic risk scoring.**
 
-## Installation
+## **🧮 How It Works: The Scoring Engine**
 
-### Quick Start
+RTFI calculates a total **Compliance Risk Score** (![][image1]) using a weighted sum of five deterministic signals. Unlike "evals" that look at output, RTFI looks at the *environment* of the session.
 
-```bash
-# Clone the repository
-git clone https://github.com/lcatlett/rtfi.git
+### **The Formula**
+
+![][image2]Where:
+
+* ![][image3] is the normalized score (![][image4]) for each factor.  
+* ![][image5] is the assigned weight for that factor.
+
+### **Risk Factor Breakdown**
+
+|
+
+| **Factor** | **Variable** | **Weight (W)** | **Logic** |
+
+| **Agent Fanout** | ![][image6] | ![][image7] | ![][image8] |
+
+| **Context Length** | ![][image9] | ![][image10] | ![][image11] |
+
+| **Autonomy Depth** | ![][image12] | ![][image10] | ![][image13] |
+
+| **Decision Velocity** | ![][image14] | ![][image15] | ![][image16] |
+
+| **Instruction Displacement** | D | 0.10 | min(1.0, skill_tokens_injected / instruction_tokens) |
+
+When ![][image17], RTFI triggers a high-risk alert. At this point, the probability of instruction drift is high enough that human intervention is required to "re-center" the agent.
+
+**Instruction Displacement** measures how much ambient context (injected skill prompts, sub-agent output, tool results) has crowded out your CLAUDE.md. When the ratio approaches 1.0, your standing instructions are structurally at risk of being ignored — regardless of what the model "intends" to do.
+
+## **🧷 Compliance Artifact Tracker (Behavioral Layer)**
+
+Risk scoring tells you when a session is *likely* drifting. The Compliance Artifact Tracker tells you when it *actually* did.
+
+Displacement is a leading indicator (skill prompts injected > CLAUDE.md size). Compliance is a lagging indicator: **did Claude write the files its standing instructions required?** Because enforcement lives in hooks — not CLAUDE.md — it can't itself be displaced out of context.
+
+**How it works:**
+
+1. Configure the files you expect every session to touch via `RTFI_EXPECTED_ARTIFACTS` (CSV, default: `CONTEXT.md`).
+2. RTFI observes every `Write` / `Edit` tool call in `PostToolUse`, path-resolved against `$CLAUDE_PROJECT_DIR` (paths outside the project are ignored).
+3. At `Stop`, RTFI diffs expected vs. observed. Missing artifacts are persisted as `compliance_failures`, the session row is flagged `compliance_violated=1`, and a `COMPLIANCE_CHECK` entry is written to the HMAC-signed audit log.
+
+**Where you see the result:**
+
+* **Dashboard:** new **Compliance** column — ✓ (PASS), ✗ (FAIL, tooltip lists missing artifacts), or **N/A** when no artifacts are configured.
+* **`/api/compliance-stats`:** aggregate showing `high_displacement_violated / high_displacement_total` — answers "when displacement was high, how often did Claude actually stop following instructions?"
+* **`/rtfi:check`:** the per-session report now includes an Artifact Compliance line with `expected`, `observed`, and `missing` arrays (in both text and JSON output).
+
+**Opt-out:** set `RTFI_EXPECTED_ARTIFACTS=""` to disable enforcement; the dashboard renders `N/A` and no scoring behavior changes.
+
+## **🚀 Quick Start**
+
+### **Installation**
+
+\# Clone the repository  
+git clone \[https://github.com/lcatlett/rtfi.git\](https://github.com/lcatlett/rtfi.git)  
 cd rtfi
 
-# Run setup (validates environment, initializes config and database)
+\# Run setup  
 bash scripts/setup.sh
-```
 
-The setup script will:
-1. Activate mise-managed Python if available
-2. Verify Python >= 3.10
-3. Create `~/.rtfi/` directory with correct permissions
-4. Generate default `~/.rtfi/config.env`
-5. Initialize the SQLite database
+### **First-Run Setup**
 
-## Commands
+Run the setup wizard to validate your environment and create the default config:
 
-| Command | Description |
-|---------|-------------|
-| `/rtfi:sessions` | List recent sessions with risk scores |
-| `/rtfi:risky` | Show sessions that exceeded threshold |
-| `/rtfi:show <id>` | Detailed view of a specific session |
-| `/rtfi:status` | RTFI status and statistics |
-| `/rtfi:health` | Run health check |
-| `/rtfi:setup` | First-run setup and validation |
-| `/rtfi:checkpoint` | Reset autonomy depth for the current session |
-| `/rtfi:dashboard` | Launch the web dashboard |
-| `/rtfi:demo` | Run a synthetic high-risk scenario against the live database |
-| `/rtfi:check` | Validate a session against declared constraints |
+python3 scripts/rtfi\_cli.py setup
 
-## Web Dashboard
+## **🕹️ Usage & Commands**
 
-RTFI includes a live web dashboard for customer demos and monitoring. It requires no extra dependencies — Python stdlib only, with Chart.js loaded from CDN (SRI-verified).
+| **Command** | **Description** |
 
-```bash
-# Start the dashboard (opens browser automatically)
-python3 scripts/rtfi_dashboard.py
+| /rtfi:dashboard | **Launch the live web dashboard** with real-time risk gauges. |
 
-# Specify a port or suppress browser
-python3 scripts/rtfi_dashboard.py --port 7430 --no-browser
-```
+| /rtfi:checkpoint | Reset autonomy depth (tell RTFI "I'm back in control"). |
 
-Open **http://localhost:7430**. The dashboard shows:
+| /rtfi:risky | Show sessions that exceeded your risk threshold. |
 
-- **Live risk gauge** — ring indicator that updates every 2 seconds during an active Claude session, color-coded green / amber / red
-- **Factor bars** — real-time breakdown of context length, agent fanout, autonomy depth, and decision velocity with weights
-- **5 analytics charts** — daily volume & risk trend, session outcomes, risk distribution, tool usage vs risk, risk factor radar
-- **Session history** — last 25 sessions, clickable rows with peak score badges
-- **Session detail** — full event timeline with per-event risk scores via modal drill-down
+| /rtfi:check | Validate a session against declared constraints and report artifact compliance (expected/observed/missing). |
 
-Stop with `Ctrl+C`.
+## **📊 Web Dashboard**
 
-## Demo and Compliance Validation
+RTFI includes a live dashboard for monitoring. It shows:
 
-Two scripts support live demos and post-session compliance analysis.
+* **Live Risk Gauge:** A color-coded (Green/Amber/Red) ring indicator that updates every 2 seconds.  
+* **Factor Breakdown:** Real-time bars showing exactly which metric is pushing you toward a liability.  
+* **Session History + Compliance Column:** Every past session with its risk score and a ✓ / ✗ / N/A badge indicating whether expected artifacts were actually written.  
+* **Audit Trail:** Tamper-evident logs of every tool call and its associated risk at that moment.
 
-### Synthetic scenario (`demo_scenario.py`)
+To start: python3 scripts/rtfi\_dashboard.py
 
-Drives the database with a scripted high-risk session so you can watch the gauge climb:
+## **📂 Documentation**
 
-```bash
-# Terminal 1 — keep the dashboard open
-python3 scripts/rtfi_dashboard.py
+* [**Architecture**](https://github.com/lcatlett/rtfi/blob/main/docs/ARCHITECTURE.md)**:** Deep dive into the deterministic engine and scoring logic.  
+* [**Product Brief**](https://github.com/lcatlett/rtfi/blob/main/docs/PRODUCT-BRIEF.md)**:** Market analysis, the "Instruction Gap," and academic benchmarks.  
+* [**Troubleshooting**](https://github.com/lcatlett/rtfi/blob/main/docs/TROUBLESHOOTING.md)**:** Common issues and health checks.
 
-# Terminal 2 — run the scenario (0.6s between events by default)
-python3 scripts/demo_scenario.py                    # combined (breaches ~75)
-python3 scripts/demo_scenario.py --scenario fanout  # 5 parallel agents
-python3 scripts/demo_scenario.py --scenario velocity # rapid tool calls
-python3 scripts/demo_scenario.py --fast             # instant (no delays)
-```
-
-### Compliance check (`demo_compliance_check.py`)
-
-Replays a session's event sequence and checks it against declared constraints:
-
-```bash
-python3 scripts/demo_compliance_check.py --latest          # most recent session
-python3 scripts/demo_compliance_check.py <session-id>      # by prefix
-python3 scripts/demo_compliance_check.py --latest --json   # machine-readable
-python3 scripts/demo_compliance_check.py --latest --constraints constraints.json
-```
-
-Default constraints checked: max 2 parallel agents, confirm every 5 steps, 80k token context guard, risk threshold ≤ 70. All thresholds are configurable via JSON file.
-
-Output: per-constraint PASS / WARN / FAIL verdict, exact violation location (step number, tool, timestamp), score decomposition, and the verbatim `systemMessage` RTFI sent to Claude at threshold breach.
-
-## Configuration
-
-Settings are loaded in this priority order (highest wins):
-
-1. Environment variables (`RTFI_THRESHOLD`, `RTFI_ACTION_MODE`, etc.)
-2. Config file (`~/.rtfi/config.env`)
-3. Legacy settings file (`.claude/rtfi.local.md`)
-4. Built-in defaults
-
-### Config File
-
-Run `python3 scripts/rtfi_cli.py setup` to generate a default `~/.rtfi/config.env`, or create one manually:
-
-```env
-# Risk score threshold (0-100)
-threshold=70.0
-
-# Action when threshold exceeded: alert, block, confirm
-action_mode=alert
-
-# Data retention in days (1-3650)
-retention_days=90
-
-# Normalization thresholds (adjust for your workflow)
-max_tokens=128000
-max_agents=5
-max_steps=10
-max_tools_per_min=20.0
-```
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RTFI_THRESHOLD` | `70.0` | Risk score alert threshold (0-100) |
-| `RTFI_ACTION_MODE` | `alert` | `alert`, `block`, or `confirm` |
-| `RTFI_RETENTION_DAYS` | `90` | How long to keep session data |
-| `RTFI_MAX_TOKENS` | `128000` | Token normalization ceiling |
-| `RTFI_MAX_AGENTS` | `5` | Agent count normalization ceiling |
-| `RTFI_MAX_STEPS` | `10` | Autonomy depth normalization ceiling |
-| `RTFI_MAX_TOOLS_PER_MIN` | `20.0` | Decision velocity normalization ceiling |
-| `RTFI_STATSD_HOST` | *(unset)* | Enable StatsD metrics export |
-| `RTFI_STATSD_PORT` | `8125` | StatsD UDP port |
-
-## How It Works
-
-1. **Hooks track session activity** - Every tool call, agent spawn, and response
-2. **Risk score calculated in real-time** - Deterministic formula, no LLM needed
-3. **Alerts fire at threshold** - Warning appears in session
-4. **Session data logged** - SQLite database at `~/.rtfi/rtfi.db`
-5. **Structured JSON logs** - Parseable by `jq`, Datadog, Splunk at `~/.rtfi/rtfi.log`
-6. **Tamper-evident audit trail** - HMAC-signed entries at `~/.rtfi/audit.log`
-
-## Data Storage
-
-Sessions and events stored locally at `~/.rtfi/rtfi.db`. No cloud dependency.
-
-## Troubleshooting
-
-Having issues? See the [Troubleshooting Guide](docs/TROUBLESHOOTING.md) for common problems and solutions.
-
-Quick health check:
-```bash
-python3 scripts/rtfi_cli.py health
-```
-
-## Documentation
-
-- [Architecture](docs/ARCHITECTURE.md) - Technical design, C4 diagrams, ADRs
-- [Product Brief](docs/PRODUCT-BRIEF.md) - Problem statement and solution overview
-- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
-- [Changelog](CHANGELOG.md) - Full version history
-
-## License
-
+## **📄 License**
 MIT

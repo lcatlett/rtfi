@@ -13,7 +13,7 @@ lint:
 	ruff check scripts/ tests/
 
 typecheck:
-	mypy scripts/rtfi/
+	mypy scripts/rtfi_core.py scripts/hook_handler.py scripts/rtfi_dashboard.py scripts/rtfi_cli.py
 
 format:
 	ruff format scripts/ tests/

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+#
+# starship-claude-rtfi - Wrapper that adds RTFI risk score to starship-claude
+#
+# Queries the RTFI SQLite database for the current session's risk score,
+# exports it as CLAUDE_RTFI_RISK and CLAUDE_RTFI_LEVEL env vars, then
+# delegates to the original starship-claude.
+#
+set -o nounset -o pipefail
+
+RTFI_DB="${RTFI_DB_PATH:-$HOME/.rtfi/rtfi.db}"
+SESSION_FILE="$HOME/.rtfi/current_session"
+
+# Read stdin once (starship-claude also needs it)
+payload="$(cat || true)"
+
+# Default RTFI values
+export CLAUDE_RTFI_RISK="--"
+export CLAUDE_RTFI_LEVEL="none"
+
+# Get session ID from env or file
+session_id="${RTFI_SESSION_ID:-}"
+if [ -z "$session_id" ] && [ -f "$SESSION_FILE" ]; then
+  session_id="$(cat "$SESSION_FILE" 2>/dev/null || true)"
+fi
+
+# Query risk score from SQLite (fast, <5ms)
+if [ -n "$session_id" ] && [ -f "$RTFI_DB" ]; then
+  risk_row="$(sqlite3 -separator '|' "$RTFI_DB" \
+    "SELECT COALESCE(peak_risk_score, 0), outcome FROM sessions WHERE id = '$session_id' LIMIT 1" 2>/dev/null || true)"
+
+  if [ -n "$risk_row" ]; then
+    score="${risk_row%%|*}"
+    # Round to integer
+    score_int="$(printf '%.0f' "$score" 2>/dev/null || echo "0")"
+
+    if [ "$score_int" -le 30 ] 2>/dev/null; then
+      level="low"
+    elif [ "$score_int" -le 50 ]; then
+      level="moderate"
+    elif [ "$score_int" -le 70 ]; then
+      level="elevated"
+    elif [ "$score_int" -le 85 ]; then
+      level="high"
+    else
+      level="critical"
+    fi
+
+    export CLAUDE_RTFI_RISK="$score_int"
+    export CLAUDE_RTFI_LEVEL="$level"
+  fi
+fi
+
+# Delegate to original starship-claude, passing stdin through
+printf '%s' "$payload" | ~/.local/bin/starship-claude "$@"

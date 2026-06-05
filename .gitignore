@@ -57,3 +57,4 @@ htmlcov/
 *.db
 .dual-graph/
 .gstack/
+local.settings.json
